@@ -12,6 +12,22 @@ export type {
   Target,
 } from "./compile.js";
 
+export type {
+  ProgramInterface,
+  StageInfo,
+  AttributeInfo,
+  OutputInfo,
+  LooseUniformInfo,
+  UniformBlockInfo,
+  UniformFieldInfo,
+  SamplerInfo,
+  TextureInfo,
+  StorageBufferInfo,
+} from "./interface.js";
+
+export type { LayoutInfo, LayoutTarget, FieldLayout } from "./layout.js";
+export { computeLayout } from "./layout.js";
+
 // Backend-specific subpaths:
 //
 //   import { linkEffect } from "@aardworx/wombat.shader-runtime/webgl2";

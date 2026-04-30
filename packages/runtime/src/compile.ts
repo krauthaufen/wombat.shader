@@ -30,6 +30,7 @@ import {
 import { emitGlsl, type EmitResult as GlslEmitResult } from "@aardworx/wombat.shader-glsl";
 import { emitWgsl, type EmitResult as WgslEmitResult } from "@aardworx/wombat.shader-wgsl";
 import { parseShader, type EntryRequest } from "@aardworx/wombat.shader-frontend";
+import { buildInterface, type ProgramInterface, type StageInfo } from "./interface.js";
 
 export type Target = "glsl" | "wgsl";
 
@@ -44,6 +45,13 @@ export interface CompiledStage {
 export interface CompiledEffect {
   readonly target: Target;
   readonly stages: readonly CompiledStage[];
+  /**
+   * Full backend-ready signature: vertex attributes, fragment outputs,
+   * uniform blocks with std140/WGSL-resolved field offsets, samplers,
+   * textures, storage buffers, and per-stage source.
+   * Modeled after FShade's GLSLProgramInterface.
+   */
+  readonly interface: ProgramInterface;
 }
 
 export interface CompileOptions {
@@ -82,15 +90,25 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
 
 function emitAll(module: Module, target: Target): CompiledEffect {
   const stages: CompiledStage[] = [];
+  const stageInfos: StageInfo[] = [];
   for (const v of module.values) {
     if (v.kind !== "Entry") continue;
     if (target === "glsl") {
       const r = emitGlsl(module, v.entry.name);
       stages.push({ stage: v.entry.stage, entryName: v.entry.name, source: r.source, bindings: r.bindings, meta: r.meta });
+      stageInfos.push({
+        stage: v.entry.stage, entryName: v.entry.name, source: r.source,
+        ...(r.meta.workgroupSize ? { workgroupSize: r.meta.workgroupSize } : {}),
+      });
     } else {
       const r = emitWgsl(module, v.entry.name);
       stages.push({ stage: v.entry.stage, entryName: v.entry.name, source: r.source, bindings: r.bindings, meta: r.meta });
+      stageInfos.push({
+        stage: v.entry.stage, entryName: v.entry.name, source: r.source,
+        ...(r.meta.workgroupSize ? { workgroupSize: r.meta.workgroupSize } : {}),
+      });
     }
   }
-  return { target, stages };
+  const iface = buildInterface({ target, module, stages: stageInfos });
+  return { target, stages, interface: iface };
 }
