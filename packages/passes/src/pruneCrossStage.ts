@@ -35,25 +35,33 @@ import { readInputs as readInputsAnalysis } from "./analysis.js";
 
 export function pruneCrossStage(module: Module): Module {
   let current = module;
-  // Iterate to a fixed point. Bound the iterations defensively.
+  // Iterate to a fixed point. Each pass returns whether it changed
+  // anything; we stop the moment a sweep is a no-op. Bounded
+  // defensively at 16 iterations in case a future bug introduces
+  // oscillation.
   for (let iter = 0; iter < 16; iter++) {
-    const next = pruneOnce(current);
-    if (sameLayout(current, next)) return next;
+    const { module: next, changed } = pruneOnce(current);
+    if (!changed) return next;
     current = next;
   }
   return current;
 }
 
-function pruneOnce(module: Module): Module {
+interface PruneResult {
+  readonly module: Module;
+  readonly changed: boolean;
+}
+
+function pruneOnce(module: Module): PruneResult {
   const liveInputs = collectLiveInputs(module);
-
+  let changed = false;
   const newValues = module.values.map((v) => {
-    if (v.kind !== "Entry") return v;
-    if (v.entry.stage !== "vertex") return v;
-    return { ...v, entry: pruneVertex(v.entry, liveInputs) };
+    if (v.kind !== "Entry" || v.entry.stage !== "vertex") return v;
+    const pruned = pruneVertex(v.entry, liveInputs);
+    if (pruned !== v.entry) changed = true;
+    return { ...v, entry: pruned };
   });
-
-  return { ...module, values: newValues };
+  return { module: changed ? { ...module, values: newValues } : module, changed };
 }
 
 /**
@@ -117,24 +125,3 @@ function stripWritesTo(s: Stmt, dropped: ReadonlySet<string>): Stmt {
   return transform(mapStmt(s, { stmt: transform }));
 }
 
-/**
- * Cheap equality on the parts we care about: per-entry output names
- * and body string-shape. A more thorough fixed-point check would diff
- * IR; this is good enough for typical pipelines (a handful of stages,
- * a couple of iterations to converge).
- */
-function sameLayout(a: Module, b: Module): boolean {
-  if (a.values.length !== b.values.length) return false;
-  for (let i = 0; i < a.values.length; i++) {
-    const x = a.values[i]!, y = b.values[i]!;
-    if (x.kind !== y.kind) return false;
-    if (x.kind === "Entry" && y.kind === "Entry") {
-      if (x.entry.outputs.length !== y.entry.outputs.length) return false;
-      for (let j = 0; j < x.entry.outputs.length; j++) {
-        if (x.entry.outputs[j]!.name !== y.entry.outputs[j]!.name) return false;
-      }
-      if (JSON.stringify(x.entry.body) !== JSON.stringify(y.entry.body)) return false;
-    }
-  }
-  return true;
-}
