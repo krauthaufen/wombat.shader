@@ -6,6 +6,7 @@
     { "path": "./packages/wgsl" },
     { "path": "./packages/passes" },
     { "path": "./packages/types" },
-    { "path": "./packages/frontend" }
+    { "path": "./packages/frontend" },
+    { "path": "./packages/runtime" }
   ]
 }

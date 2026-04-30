@@ -213,12 +213,22 @@ function emitSampler(ctx: Ctx, name: string, type: Type): void {
 }
 
 function emitEntryIO(ctx: Ctx, e: EntryDef): void {
+  // GLSL ES 3.00 layout-location rules:
+  //  - vertex inputs (attributes)     : location IS allowed
+  //  - vertex outputs (interpolants)  : location NOT allowed (name-matched)
+  //  - fragment inputs (interpolants) : location NOT allowed
+  //  - fragment outputs (color out)   : location IS allowed
+  //  - compute: no in/out
+  const allowInputLocation = e.stage === "vertex";
+  const allowOutputLocation = e.stage === "fragment";
+
   let nextLoc = 0;
   for (const p of e.inputs) {
     if (isBuiltin(p)) continue;
     const loc = locationOf(p) ?? nextLoc++;
     const interp = interpolation(p);
-    const prefix = (interp ? interp + " " : "") + `layout(location = ${loc}) in`;
+    const layout = allowInputLocation ? `layout(location = ${loc}) ` : "";
+    const prefix = (interp ? interp + " " : "") + `${layout}in`;
     ctx.out.line(`${prefix} ${typeStr(p.type)} ${p.name};`);
     ctx.bindings.inputs.push({ name: p.name, location: loc, type: p.type });
   }
@@ -227,7 +237,8 @@ function emitEntryIO(ctx: Ctx, e: EntryDef): void {
     if (isBuiltin(p)) continue;
     const loc = locationOf(p) ?? nextLoc++;
     const interp = interpolation(p);
-    const prefix = (interp ? interp + " " : "") + `layout(location = ${loc}) out`;
+    const layout = allowOutputLocation ? `layout(location = ${loc}) ` : "";
+    const prefix = (interp ? interp + " " : "") + `${layout}out`;
     ctx.out.line(`${prefix} ${typeStr(p.type)} ${p.name};`);
     ctx.bindings.outputs.push({ name: p.name, location: loc, type: p.type });
   }

@@ -199,6 +199,13 @@ function typeFromNode(node: ts.TypeNode, ctx: Ctx): Type {
   if (node.kind === ts.SyntaxKind.NumberKeyword) return Tf32;
   if (node.kind === ts.SyntaxKind.BooleanKeyword) return Tbool;
   if (node.kind === ts.SyntaxKind.VoidKeyword) return Tvoid;
+  // An object-type-literal as a return type is an "output record"
+  // shape (see translateObjectLiteral / liftReturns). We don't model
+  // it as a struct in the IR — the caller declares the actual outputs
+  // in the EntryRequest, and liftReturns matches by name. Returning
+  // Void here is harmless because the entry's body never reads the
+  // return type.
+  if (ts.isTypeLiteralNode(node)) return Tvoid;
   addDiagnostic(ctx, node, `frontend: unsupported type syntax (${ts.SyntaxKind[node.kind]})`);
   return Tvoid;
 }
@@ -398,6 +405,7 @@ function translateExpr(node: ts.Expression, ctx: Ctx): Expr {
     const type = typeFromNode(node.type, ctx);
     return { ...inner, type } as Expr;
   }
+  if (ts.isObjectLiteralExpression(node)) return translateObjectLiteral(node, ctx);
 
   addDiagnostic(ctx, node, `frontend: unsupported expression (${ts.SyntaxKind[node.kind]})`);
   return { kind: "Const", value: { kind: "Float", value: 0 }, type: Tf32 };
@@ -728,6 +736,38 @@ function addDiagnostic(ctx: Ctx, node: ts.Node, message: string): void {
     start: node.getStart(ctx.source),
     end: node.getEnd(),
   });
+}
+
+/**
+ * Object-literal return values become a synthetic carrier that
+ * `liftReturns` rewrites into per-output WriteOutput statements.
+ * Carrier shape: a `Const(Null)` whose hidden `_record` property
+ * holds the name → expression map. The IR shape is JSON-safe; the
+ * `_record` field is invisible to JSON.stringify but visible to
+ * pattern-matching passes.
+ */
+function translateObjectLiteral(node: ts.ObjectLiteralExpression, ctx: Ctx): Expr {
+  const fields = new Map<string, Expr>();
+  for (const prop of node.properties) {
+    if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+      fields.set(prop.name.text, translateExpr(prop.initializer, ctx));
+    } else if (ts.isShorthandPropertyAssignment(prop)) {
+      // `{ outColor }` — short for `{ outColor: outColor }`
+      fields.set(prop.name.text, translateExpr(prop.name, ctx));
+    } else {
+      addDiagnostic(ctx, prop, "frontend: unsupported object literal property");
+    }
+  }
+  // Build the carrier expression. `_record` is non-enumerable so JSON
+  // serialisation skips it; passes that pattern-match access it
+  // directly via `(value as any)._record`.
+  const carrier: Expr = { kind: "Const", value: { kind: "Null" }, type: Tvoid };
+  Object.defineProperty(carrier, "_record", {
+    value: fields,
+    enumerable: false,
+    writable: false,
+  });
+  return carrier;
 }
 
 function describeType(t: Type): string {
