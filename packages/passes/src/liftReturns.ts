@@ -97,6 +97,9 @@ function tryLiftReturn(value: Expr, entry: EntryDef): Stmt | undefined {
     });
   }
   if (writes.length === 0) return undefined;
-  writes.push({ kind: "Return" });
+  // No trailing `Return`: the WGSL emitter auto-appends `return out;`
+  // for stages with synthetic output structs, and GLSL's `void main()`
+  // doesn't need an explicit final return. Adding one here produces
+  // dead code after the auto-return in WGSL.
   return { kind: "Sequential", body: writes };
 }

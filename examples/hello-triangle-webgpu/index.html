@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>wombat.shader — hello triangle (WebGPU)</title>
+  <style>
+    body { margin: 0; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+    main { display: grid; place-items: center; height: 100vh; }
+    canvas { width: 512px; height: 512px; image-rendering: pixelated; background: #000; }
+    pre { font-size: 11px; line-height: 1.3; color: #6b6; margin: 1em; white-space: pre-wrap; max-width: 90vw; }
+  </style>
+</head>
+<body>
+  <main>
+    <canvas id="c" width="512" height="512"></canvas>
+    <pre id="log"></pre>
+  </main>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>
