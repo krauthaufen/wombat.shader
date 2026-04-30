@@ -92,15 +92,16 @@ Phase 0 in place; later phases scaffolded but not yet present.
 ```
 wombat.shader/                   (npm workspaces; tsc project references)
 ├─ packages/
-│  ├─ ir/         @aardworx/wombat.shader-ir       IR types + visitors + JSON
-│  ├─ passes/     @aardworx/wombat.shader-passes   fold/dce/cse/inline/compose/prune/legalise
-│  ├─ glsl/       @aardworx/wombat.shader-glsl     IR → GLSL ES 3.00
-│  ├─ wgsl/       @aardworx/wombat.shader-wgsl     IR → WGSL
-│  └─ types/      @aardworx/wombat.shader-types    shipped .d.ts: V*/M*/sampler*/intrinsics
-└─ tests/         vitest e2e for both emitters + per-pass tests
+│  ├─ ir/         @aardworx/wombat.shader-ir         IR types + visitors + JSON
+│  ├─ passes/     @aardworx/wombat.shader-passes     fold/dce/cse/inline/compose/prune/legalise
+│  ├─ glsl/       @aardworx/wombat.shader-glsl       IR → GLSL ES 3.00
+│  ├─ wgsl/       @aardworx/wombat.shader-wgsl       IR → WGSL
+│  ├─ types/      @aardworx/wombat.shader-types      shipped .d.ts: V*/M*/sampler*/intrinsics
+│  └─ frontend/   @aardworx/wombat.shader-frontend   TS source → IR (TS Compiler API)
+└─ tests/         vitest e2e: TS source → IR → GLSL/WGSL + per-pass tests
 
-(planned, not yet present: packages/frontend, packages/runtime,
-packages/vite, packages/swc; examples/hello-triangle, instanced-cubes,
+(planned, not yet present: packages/runtime, packages/vite,
+packages/swc; examples/hello-triangle, instanced-cubes,
 compute-particles.)
 ```
 
