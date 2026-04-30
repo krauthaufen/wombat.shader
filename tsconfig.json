@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/ir" },
     { "path": "./packages/glsl" },
-    { "path": "./packages/wgsl" }
+    { "path": "./packages/wgsl" },
+    { "path": "./packages/passes" }
   ]
 }

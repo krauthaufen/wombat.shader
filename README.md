@@ -93,13 +93,14 @@ Phase 0 in place; later phases scaffolded but not yet present.
 wombat.shader/                   (npm workspaces; tsc project references)
 ├─ packages/
 │  ├─ ir/         @aardworx/wombat.shader-ir       IR types + visitors + JSON
+│  ├─ passes/     @aardworx/wombat.shader-passes   foldConstants / dce / cse / inline
 │  ├─ glsl/       @aardworx/wombat.shader-glsl     IR → GLSL ES 3.00
 │  └─ wgsl/       @aardworx/wombat.shader-wgsl     IR → WGSL
-└─ tests/         vitest e2e for both emitters
+└─ tests/         vitest e2e for both emitters + per-pass tests
 
-(planned, not yet present: packages/passes, packages/frontend,
-packages/types, packages/runtime, packages/vite, packages/swc;
-examples/hello-triangle, instanced-cubes, compute-particles.)
+(planned, not yet present: packages/frontend, packages/types,
+packages/runtime, packages/vite, packages/swc; examples/hello-triangle,
+instanced-cubes, compute-particles.)
 ```
 
 `@aardworx/wombat.shader-ir` and `@aardworx/wombat.shader-passes` are pure — no DOM, no toolchain.

@@ -14,13 +14,40 @@ own `dist/` and depends on others via the workspace symlink.
 wombat.shader/
 ├─ packages/
 │  ├─ ir/      @aardworx/wombat.shader-ir       — IR types + visitors + JSON
+│  ├─ passes/  @aardworx/wombat.shader-passes   — foldConstants/dce/cse/inline
 │  ├─ glsl/    @aardworx/wombat.shader-glsl     — IR → GLSL ES 3.00
 │  └─ wgsl/    @aardworx/wombat.shader-wgsl     — IR → WGSL
 └─ tests/      vitest tests at the root
 ```
 
-Future packages (planned, not yet present): `passes/`, `frontend/`,
-`types/`, `runtime/`, `vite/`, `swc/`. See `README.md` roadmap.
+Future packages (planned, not yet present): `frontend/`, `types/`,
+`runtime/`, `vite/`, `swc/`. See `README.md` roadmap.
+
+## Passes
+
+Every pass is `(Module) → Module`. Pure functions, no mutation. Compose
+freely:
+
+```ts
+const optimised = dce(cse(foldConstants(inlinePass(m))));
+```
+
+Implementation rules:
+
+- Use the helpers in `packages/passes/src/transform.ts` (`mapExpr`,
+  `mapStmt`, `mapStmtChildren`) — these preserve referential equality
+  on unchanged subtrees so subsequent passes can short-circuit.
+- Use `analysis.ts` for `isPure`, `freeVarsStmt`, `readInputs`,
+  `writtenOutputs`. Don't roll your own walk.
+- Within a pass, prefer post-order: fold children, then the parent.
+  `mapExpr(e, fn)` is post-order by default.
+- `mapStmt(s, m)` recurses into nested Stmts automatically. If `m.stmt`
+  is provided, it's applied to every child (post-order). To process the
+  outermost Stmt as well, wrap: `m.stmt(mapStmt(s, m))`.
+
+When extending a pass, add a hand-built IR test in `tests/passes.test.ts`
+demonstrating the rewrite. Don't rely on snapshot tests for passes —
+assert structurally on the resulting IR.
 
 ## Tooling
 
