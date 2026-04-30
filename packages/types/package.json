@@ -1,0 +1,18 @@
+{
+  "name": "@aardworx/wombat.shader-types",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shipped .d.ts declarations users import in shader source: V*/M*/sampler* and the intrinsic surface. Frontend recognises these by class identity (and the brand symbol) and translates them to structural IR.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"]
+}

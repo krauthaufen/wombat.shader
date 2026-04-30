@@ -8,6 +8,8 @@ export type { InlinePolicy } from "./inline.js";
 export { reduceUniforms } from "./reduceUniforms.js";
 export { pruneCrossStage } from "./pruneCrossStage.js";
 export { composeStages } from "./composeStages.js";
+export { legaliseTypes } from "./legaliseTypes.js";
+export type { Target } from "./legaliseTypes.js";
 
 export {
   isPure,
