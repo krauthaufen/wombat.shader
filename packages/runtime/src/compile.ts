@@ -15,7 +15,7 @@
 // For pre-built modules (no TS source — caller hand-built the IR),
 // `compileModule` skips the frontend step.
 
-import type { Module, Stage } from "@aardworx/wombat.shader-ir";
+import type { Module, Stage, ValueDef } from "@aardworx/wombat.shader-ir";
 import {
   composeStages,
   cse,
@@ -30,7 +30,7 @@ import {
 import { emitGlsl, type EmitResult as GlslEmitResult } from "@aardworx/wombat.shader-glsl";
 import { emitWgsl, type EmitResult as WgslEmitResult } from "@aardworx/wombat.shader-wgsl";
 import { parseShader, type EntryRequest } from "@aardworx/wombat.shader-frontend";
-import { buildInterface, type ProgramInterface, type StageInfo } from "./interface.js";
+import { buildInterface, type ProgramInterface, type StageSourceInfo } from "./interface.js";
 
 export type Target = "glsl" | "wgsl";
 
@@ -58,6 +58,13 @@ export interface CompileOptions {
   readonly target: Target;
   /** Skip the optimiser passes; useful for debugging. */
   readonly skipOptimisations?: boolean;
+  /**
+   * Extra module-level ValueDefs to merge with the parsed entries.
+   * Use this to declare `Uniform` blocks, `Sampler` / `StorageBuffer`
+   * bindings, or auxiliary `Function` decls that the shader source
+   * references by name.
+   */
+  readonly extraValues?: readonly ValueDef[];
 }
 
 export function compileShaderSource(
@@ -65,8 +72,11 @@ export function compileShaderSource(
   entries: readonly EntryRequest[],
   options: CompileOptions,
 ): CompiledEffect {
-  const module = parseShader({ source, entries });
-  return compileModule(module, options);
+  const parsed = parseShader({ source, entries });
+  const merged: Module = options.extraValues
+    ? { ...parsed, values: [...options.extraValues, ...parsed.values] }
+    : parsed;
+  return compileModule(merged, options);
 }
 
 export function compileModule(module: Module, options: CompileOptions): CompiledEffect {
@@ -90,7 +100,7 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
 
 function emitAll(module: Module, target: Target): CompiledEffect {
   const stages: CompiledStage[] = [];
-  const stageInfos: StageInfo[] = [];
+  const stageInfos: StageSourceInfo[] = [];
   for (const v of module.values) {
     if (v.kind !== "Entry") continue;
     if (target === "glsl") {

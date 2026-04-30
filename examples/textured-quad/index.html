@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>wombat.shader — textured quad (UBO + sampler, both backends)</title>
+  <style>
+    body { margin: 0; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+    main { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; padding: 1em; }
+    section { display: flex; flex-direction: column; gap: 0.5em; align-items: center; }
+    canvas { width: 384px; height: 384px; image-rendering: pixelated; background: #000; }
+    h2 { margin: 0; font-size: 14px; opacity: 0.7; }
+    pre { font-size: 10px; line-height: 1.3; color: #6b6; max-width: 384px; overflow: auto; max-height: 200px; white-space: pre; }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h2>WebGL2 (GLSL ES 3.00)</h2>
+      <canvas id="gl" width="384" height="384"></canvas>
+      <pre id="gl-log"></pre>
+    </section>
+    <section>
+      <h2>WebGPU (WGSL)</h2>
+      <canvas id="wgpu" width="384" height="384"></canvas>
+      <pre id="wgpu-log"></pre>
+    </section>
+  </main>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

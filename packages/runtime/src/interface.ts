@@ -16,7 +16,9 @@
 // the offset.
 
 import type {
+  BuiltinSemantic,
   EntryDef,
+  EntryParameter,
   Module,
   Stage,
   Type,
@@ -44,6 +46,41 @@ export interface StageInfo {
   readonly source: string;
   /** Compute only: workgroup_size. */
   readonly workgroupSize?: readonly [number, number, number] | undefined;
+  /**
+   * Every input parameter to this stage, including @builtin ones.
+   * For the vertex stage these are also surfaced as `attributes` at
+   * the top of the interface; this list is the full per-stage view.
+   */
+  readonly inputs: readonly StageParameterInfo[];
+  /**
+   * Every output parameter from this stage, including @builtin ones
+   * (e.g. `position` for vertex, `frag_depth` for fragment).
+   */
+  readonly outputs: readonly StageParameterInfo[];
+  /**
+   * Compute stages: workgroup-style builtin arguments
+   * (global_invocation_id, etc.).
+   */
+  readonly arguments: readonly StageParameterInfo[];
+}
+
+export interface StageParameterInfo {
+  readonly name: string;
+  readonly type: Type;
+  readonly semantic: string;
+  /** Location for non-builtin parameters; absent for @builtin params. */
+  readonly location?: number | undefined;
+  /** @builtin name (`position`, `vertex_index`, …) for builtin parameters. */
+  readonly builtin?: BuiltinSemantic | undefined;
+  /** Interpolation mode (vertex outputs / fragment inputs). */
+  readonly interpolation?: "smooth" | "flat" | "centroid" | "sample" | "no-perspective" | undefined;
+  /**
+   * WebGPU `GPUVertexFormat` string (vertex-stage inputs only).
+   * `byteSize` reports the same value the matching `AttributeInfo`
+   * would carry; here for callers who only walk the per-stage view.
+   */
+  readonly vertexFormat?: string | undefined;
+  readonly byteSize?: number | undefined;
 }
 
 export interface AttributeInfo {
@@ -116,15 +153,23 @@ export interface StorageBufferInfo {
 // Builder
 // ─────────────────────────────────────────────────────────────────────
 
+export interface StageSourceInfo {
+  readonly stage: Stage;
+  readonly entryName: string;
+  readonly source: string;
+  readonly workgroupSize?: readonly [number, number, number] | undefined;
+}
+
 export interface BuildInterfaceInput {
   readonly target: Target;
   readonly module: Module;
-  readonly stages: readonly StageInfo[];
+  readonly stages: readonly StageSourceInfo[];
 }
 
 export function buildInterface(input: BuildInterfaceInput): ProgramInterface {
   const layoutTarget: LayoutTarget = input.target === "glsl" ? "glsl-std140" : "wgsl-uniform";
 
+  const stages = enrichStageInfo(input.module, input.stages);
   const attributes = collectAttributes(input.module);
   const fragmentOutputs = collectFragmentOutputs(input.module);
   const { uniforms, uniformBlocks } = collectUniforms(input.module, layoutTarget);
@@ -133,7 +178,7 @@ export function buildInterface(input: BuildInterfaceInput): ProgramInterface {
 
   return {
     target: input.target,
-    stages: input.stages,
+    stages,
     attributes,
     fragmentOutputs,
     uniforms,
@@ -142,6 +187,76 @@ export function buildInterface(input: BuildInterfaceInput): ProgramInterface {
     textures,
     storageBuffers,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Enrich the per-stage source info with full inputs/outputs/arguments.
+// ─────────────────────────────────────────────────────────────────────
+
+function enrichStageInfo(module: Module, stages: readonly StageSourceInfo[]): StageInfo[] {
+  const out: StageInfo[] = [];
+  for (const s of stages) {
+    const entry = entryByName(module, s.entryName);
+    if (!entry) {
+      // Should not happen — the stages array is built from the same Module.
+      out.push({ ...s, inputs: [], outputs: [], arguments: [] });
+      continue;
+    }
+    const isVertex = entry.stage === "vertex";
+    const inputs = entry.inputs.map((p, i) => paramToInfo(p, i, isVertex));
+    const outputs = entry.outputs.map((p, i) => paramToInfo(p, i, /* needsFmt */ false));
+    const args = entry.arguments.map((p, i) => paramToInfo(p, i, /* needsFmt */ false));
+    out.push({
+      ...s,
+      inputs,
+      outputs,
+      arguments: args,
+    });
+  }
+  return out;
+}
+
+function paramToInfo(p: EntryParameter, fallbackLocation: number, needsVertexFormat: boolean): StageParameterInfo {
+  const builtin = p.decorations.find((d) => d.kind === "Builtin");
+  const locDec = p.decorations.find((d) => d.kind === "Location");
+  const interp = p.decorations.find((d) => d.kind === "Interpolation");
+
+  const result: {
+    name: string;
+    type: Type;
+    semantic: string;
+    location?: number | undefined;
+    builtin?: BuiltinSemantic | undefined;
+    interpolation?: StageParameterInfo["interpolation"];
+    vertexFormat?: string | undefined;
+    byteSize?: number | undefined;
+  } = {
+    name: p.name,
+    type: p.type,
+    semantic: p.semantic,
+  };
+
+  if (builtin && builtin.kind === "Builtin") {
+    result.builtin = builtin.value;
+  } else {
+    result.location = locDec && locDec.kind === "Location" ? locDec.value : fallbackLocation;
+  }
+  if (interp && interp.kind === "Interpolation") {
+    result.interpolation = interp.mode;
+  }
+  if (needsVertexFormat && (!builtin || builtin.kind !== "Builtin")) {
+    const fmt = vertexFormat(p.type);
+    result.vertexFormat = fmt.format;
+    result.byteSize = fmt.byteSize;
+  }
+  return result as StageParameterInfo;
+}
+
+function entryByName(module: Module, name: string): EntryDef | undefined {
+  for (const v of module.values) {
+    if (v.kind === "Entry" && v.entry.name === name) return v.entry;
+  }
+  return undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -12,6 +12,10 @@
 //     - Inverse(m: Matrix)          → CallIntrinsic("_wombat_inverseN", [m])
 //                                     and a helper FunctionDef inserted into
 //                                     the Module if not already present.
+//     - Sampler `S` referenced by   → split into a `Texture` binding (`S_view`,
+//       a sampler-bound intrinsic       at the original group/slot+1) and a
+//       (texture, textureLod, …)        `Sampler` binding (`S`, original slot).
+//                                       Calls become `textureSample(S_view, S, uv)`.
 //
 // Each rewrite preserves Expr.type (so emitters and downstream passes
 // see the same shape). The pass is pure (Module → Module).
@@ -32,6 +36,14 @@ export type Target = "glsl" | "wgsl";
 export function legaliseTypes(module: Module, target: Target): Module {
   const helperFunctions = new Map<string, ValueDef>();
 
+  // For WGSL: rewrite Sampler ValueDefs that participate in
+  // sampler-bound intrinsics into a (Sampler, Texture) pair, and
+  // rewrite the call sites accordingly.
+  let working = module;
+  if (target === "wgsl") {
+    working = splitWgslSamplers(working);
+  }
+
   const exprFn = (e: Expr): Expr => {
     switch (e.kind) {
       case "MatrixRow":
@@ -46,7 +58,7 @@ export function legaliseTypes(module: Module, target: Target): Module {
     }
   };
 
-  const newValues = module.values.map((v) => {
+  const newValues = working.values.map((v) => {
     if (v.kind === "Function") return { ...v, body: mapStmt(v.body, { expr: exprFn }) };
     if (v.kind === "Entry") return { ...v, entry: { ...v.entry, body: mapStmt(v.entry.body, { expr: exprFn }) } };
     if (v.kind === "Constant") {
@@ -61,7 +73,92 @@ export function legaliseTypes(module: Module, target: Target): Module {
   // Inject any helper functions we generated (deduped by name).
   const finalValues = [...helperFunctions.values(), ...newValues];
 
-  return { ...module, values: finalValues };
+  return { ...working, values: finalValues };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// WGSL: split combined Sampler bindings into Sampler + Texture pair
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Find every `Sampler` ValueDef whose Type is `{ kind: "Sampler", … }`
+ * and whose name appears as the first argument to a sampler-bound
+ * intrinsic (`texture`, `textureLod`, `textureSample`, …). For each:
+ *
+ *   1. Add a sibling Sampler ValueDef whose Type is `Texture` (the
+ *      texture view), at the next slot in the same group, named
+ *      `<name>_view`.
+ *   2. Rewrite call sites: `textureSample(name, …args)` →
+ *      `textureSample(<name>_view, name, …args)`.
+ *
+ * Reads of the name as a free identifier (e.g. `Var(u_tex)`) outside
+ * a sampler-bound intrinsic are rare in shader code — we leave them
+ * as-is and the user gets a WGSL validation error for them.
+ */
+function splitWgslSamplers(module: Module): Module {
+  // Identify combined sampler names.
+  const combined = new Set<string>();
+  for (const v of module.values) {
+    if (v.kind === "Sampler" && v.type.kind === "Sampler") combined.add(v.name);
+  }
+  if (combined.size === 0) return module;
+
+  // Inject paired Texture ValueDefs.
+  const newValues: ValueDef[] = [];
+  for (const v of module.values) {
+    newValues.push(v);
+    if (v.kind === "Sampler" && v.type.kind === "Sampler" && combined.has(v.name)) {
+      const textureType: Type = {
+        kind: "Texture",
+        target: v.type.target,
+        sampled: v.type.sampled,
+        arrayed: false,
+        multisampled: false,
+      };
+      newValues.push({
+        kind: "Sampler",
+        binding: { group: v.binding.group, slot: v.binding.slot + 1 },
+        name: `${v.name}_view`,
+        type: textureType,
+      });
+    }
+  }
+
+  // Rewrite call sites on the new value array.
+  const rewriteExpr = (e: Expr): Expr => {
+    if (e.kind !== "CallIntrinsic" || !e.op.samplerBinding) return e;
+    const first = e.args[0];
+    if (!first) return e;
+    // Matches a Var or ReadInput referencing the combined name.
+    const samplerName = nameOfSamplerArg(first);
+    if (!samplerName || !combined.has(samplerName)) return e;
+    const textureExpr: Expr = {
+      kind: "ReadInput", scope: "Uniform", name: `${samplerName}_view`,
+      type: {
+        kind: "Texture",
+        target: (first.type as Extract<Type, { kind: "Sampler" }>).target,
+        sampled: (first.type as Extract<Type, { kind: "Sampler" }>).sampled,
+        arrayed: false,
+        multisampled: false,
+      },
+    };
+    // textureSample(view, sampler, ...rest)
+    return { ...e, args: [textureExpr, first, ...e.args.slice(1)] };
+  };
+
+  const remappedValues = newValues.map((v) => {
+    if (v.kind === "Function") return { ...v, body: mapStmt(v.body, { expr: rewriteExpr }) };
+    if (v.kind === "Entry") return { ...v, entry: { ...v.entry, body: mapStmt(v.entry.body, { expr: rewriteExpr }) } };
+    return v;
+  });
+
+  return { ...module, values: remappedValues };
+}
+
+function nameOfSamplerArg(e: Expr): string | undefined {
+  if (e.kind === "ReadInput") return e.name;
+  if (e.kind === "Var") return e.var.name;
+  return undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────
