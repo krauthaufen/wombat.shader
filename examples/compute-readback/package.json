@@ -1,0 +1,17 @@
+{
+  "name": "@wombat-shader-example/compute-readback",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@aardworx/wombat.shader-runtime": "*"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.69",
+    "vite": "^5.0.0"
+  }
+}

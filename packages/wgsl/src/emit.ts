@@ -65,6 +65,16 @@ export function emitWgsl(module: Module, entryName?: string): EmitResult {
     structs: new Set(),
     bindings: { inputs: [], outputs: [], uniforms: [], samplers: [], storage: [] },
   };
+  // Build name → buffer-struct map so `expr()` knows that a
+  // ReadInput("Uniform", "u_camera_view") whose decl has buffer:"Camera"
+  // emits as `Camera.u_camera_view`.
+  bufferOf = new Map<string, string>();
+  for (const v of module.values) {
+    if (v.kind !== "Uniform") continue;
+    for (const u of v.uniforms) {
+      if (u.buffer) bufferOf.set(u.name, u.buffer);
+    }
+  }
 
   // Type definitions.
   for (const t of module.types) {
@@ -503,14 +513,22 @@ const BIN_OP: Partial<Record<Expr["kind"], string>> = {
   Eq: "==", Neq: "!=", Lt: "<", Le: "<=", Gt: ">", Ge: ">=",
 };
 
+// Set at the start of each emitWgsl call; lets `expr` resolve uniform
+// names that live inside a uniform-block struct.
+let bufferOf: Map<string, string> = new Map();
+
 export function expr(e: Expr): string {
   switch (e.kind) {
     case "Var":
       return e.var.name;
     case "Const":
       return literal(e.value);
-    case "ReadInput":
-      return e.scope === "Input" ? `in.${e.name}` : e.name;
+    case "ReadInput": {
+      if (e.scope === "Input") return `in.${e.name}`;
+      const buf = bufferOf.get(e.name);
+      if (buf) return `${buf}.${e.name}`;
+      return e.name;
+    }
     case "Call":
       return `${e.fn.signature.name}(${e.args.map(expr).join(", ")})`;
     case "CallIntrinsic":

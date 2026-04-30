@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>wombat.shader — compute kernel + storage buffer readback</title>
+  <style>
+    body { margin: 0; background: #111; color: #eee; font-family: system-ui, sans-serif; padding: 1em; }
+    h1 { font-size: 16px; margin: 0 0 0.5em; }
+    canvas { width: 256px; height: 256px; image-rendering: pixelated; background: #000; display: block; }
+    pre { font-size: 11px; line-height: 1.3; color: #bdb; max-height: 60vh; overflow: auto; padding: 0.5em; background: #1a1a1a; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>compute kernel — fills a 64×64 storage buffer with a Mandelbrot set, reads back, displays as canvas</h1>
+  <canvas id="c" width="64" height="64"></canvas>
+  <pre id="log"></pre>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

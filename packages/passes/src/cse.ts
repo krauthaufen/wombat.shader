@@ -63,33 +63,92 @@ function liftBlock(body: readonly Stmt[]): readonly Stmt[] {
   const candidates = [...counts.values()].filter((c) => c.count > 1);
   if (candidates.length === 0) return recursed;
 
-  // Pass 2: for each candidate, prepend a Declare and replace occurrences.
+  // Allocate _cse temps and remember the original (un-replaced)
+  // expression for each.
   const allocated = new Map<string, Var>();
+  const origExprByKey = new Map<string, Expr>();
   let counter = 0;
   for (const c of candidates) {
+    const k = hash(c.expr);
     const tmp: Var = {
       name: `_cse${counter++}`,
       type: c.expr.type,
       mutable: false,
     };
-    allocated.set(hash(c.expr), tmp);
+    allocated.set(k, tmp);
+    origExprByKey.set(k, c.expr);
   }
 
-  const replaced: Stmt[] = recursed.map((st) =>
-    replaceInStmt(st, allocated)
-  );
-
-  // Prepend declarations in deterministic order (insertion order of `allocated`).
-  const declarations: Stmt[] = [];
-  for (const [k, tmp] of allocated) {
-    const c = counts.get(k)!;
-    declarations.push({
-      kind: "Declare",
-      var: tmp,
-      init: { kind: "Expr", value: c.expr },
+  // Find the first statement (by index) that references each
+  // candidate. The Declare must be inserted at this index — earlier
+  // would put the temp's init expression before its own inputs are
+  // declared (since the subexpression may reference local lets/consts
+  // declared earlier in the block).
+  const firstUseIndex = new Map<string, number>();
+  for (let i = 0; i < recursed.length; i++) {
+    const st = recursed[i]!;
+    walkExprs(st, (e) => {
+      const k = hashIfPure(e);
+      if (k && allocated.has(k) && !firstUseIndex.has(k)) {
+        firstUseIndex.set(k, i);
+      }
     });
   }
-  return [...declarations, ...replaced];
+
+  // Replace occurrences across all statements.
+  const replaced: Stmt[] = recursed.map((st) => replaceInStmt(st, allocated));
+
+  // Build the new body by inserting Declare(_cse, init) at the first
+  // use position of each candidate. Order: primarily by first-use
+  // index, secondarily by expression size (smaller first) so a CSE
+  // candidate that's a subexpression of another is declared first.
+  const insertions = new Map<number, Stmt[]>();
+  const ordered = [...allocated.entries()].sort((a, b) => {
+    const ia = firstUseIndex.get(a[0]) ?? 0;
+    const ib = firstUseIndex.get(b[0]) ?? 0;
+    if (ia !== ib) return ia - ib;
+    const sa = sizeOf(origExprByKey.get(a[0])!);
+    const sb = sizeOf(origExprByKey.get(b[0])!);
+    return sa - sb;
+  });
+  for (const [k, tmp] of ordered) {
+    const idx = firstUseIndex.get(k) ?? 0;
+    const origExpr = origExprByKey.get(k)!;
+    // The init of the _cse temp should itself have nested CSE temps
+    // substituted, in case `b` is a CSE candidate that references
+    // another CSE candidate `a` (a must be declared first; the
+    // ordering above ensures it).
+    const initWithReplacements = replaceExprWith(origExpr, allocated);
+    const decl: Stmt = {
+      kind: "Declare", var: tmp,
+      init: { kind: "Expr", value: initWithReplacements },
+    };
+    const arr = insertions.get(idx) ?? [];
+    arr.push(decl);
+    insertions.set(idx, arr);
+  }
+
+  const out: Stmt[] = [];
+  for (let i = 0; i < replaced.length; i++) {
+    const inserts = insertions.get(i);
+    if (inserts) for (const d of inserts) out.push(d);
+    out.push(replaced[i]!);
+  }
+  return out;
+}
+
+function replaceExprWith(e: Expr, allocated: Map<string, Var>): Expr {
+  const fn = (x: Expr): Expr => {
+    const k = hashIfPure(x);
+    if (k) {
+      const tmp = allocated.get(k);
+      if (tmp) return { kind: "Var", var: tmp, type: tmp.type };
+    }
+    return _mapExprChildren(x, fn);
+  };
+  // Don't replace the outermost expression itself with its temp —
+  // that'd be `let _cse0 = _cse0;`. Skip the top, recurse into kids.
+  return _mapExprChildren(e, fn);
 }
 
 function replaceInStmt(s: Stmt, allocated: Map<string, Var>): Stmt {

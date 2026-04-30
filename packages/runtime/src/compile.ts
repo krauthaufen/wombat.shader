@@ -72,7 +72,20 @@ export function compileShaderSource(
   entries: readonly EntryRequest[],
   options: CompileOptions,
 ): CompiledEffect {
-  const parsed = parseShader({ source, entries });
+  // Build a name → IR-type table from extraValues so the frontend
+  // can resolve free identifiers (uniforms, samplers) to their actual
+  // types instead of defaulting to f32.
+  const externalTypes = new Map<string, import("@aardworx/wombat.shader-ir").Type>();
+  for (const v of options.extraValues ?? []) {
+    if (v.kind === "Uniform") {
+      for (const u of v.uniforms) externalTypes.set(u.name, u.type);
+    } else if (v.kind === "Sampler" || v.kind === "StorageBuffer") {
+      externalTypes.set(v.name, v.kind === "StorageBuffer" ? v.layout : v.type);
+    } else if (v.kind === "Constant") {
+      externalTypes.set(v.name, v.varType);
+    }
+  }
+  const parsed = parseShader({ source, entries, externalTypes });
   const merged: Module = options.extraValues
     ? { ...parsed, values: [...options.extraValues, ...parsed.values] }
     : parsed;

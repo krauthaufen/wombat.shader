@@ -23,12 +23,13 @@
 
 import type {
   Expr,
+  LExpr,
   Module,
   Stmt,
   UniformDecl,
   ValueDef,
 } from "@aardworx/wombat.shader-ir";
-import { visitExprChildren, visitStmt } from "@aardworx/wombat.shader-ir";
+import { visitExprChildren, visitLExprChildren, visitStmt } from "@aardworx/wombat.shader-ir";
 
 export function reduceUniforms(module: Module): Module {
   const names = collectReferencedNames(module);
@@ -62,24 +63,35 @@ function collectReferencedNames(module: Module): Set<string> {
     if (e.kind === "Var") names.add(e.var.name);
     visitExprChildren(e, onExpr);
   };
+  const onLExpr = (l: LExpr): void => {
+    // LVar names also reference module-level decls (storage buffers
+    // accessed as `name[i] = ...`).
+    if (l.kind === "LVar") names.add(l.var.name);
+    if (l.kind === "LInput") names.add(l.name);
+    visitLExprChildren(l, onLExpr, onExpr);
+  };
 
   for (const v of module.values) {
     if (v.kind === "Function") {
-      walkStmt(v.body, onExpr);
+      walkStmt(v.body, onExpr, onLExpr);
     } else if (v.kind === "Entry") {
-      // Entry parameters carry names too, but those are inputs/outputs
-      // not uniforms — skip. Just walk the body.
-      walkStmt(v.entry.body, onExpr);
+      walkStmt(v.entry.body, onExpr, onLExpr);
     } else if (v.kind === "Constant") {
       if (v.init.kind === "Expr") onExpr(v.init.value);
       else for (const e of v.init.values) onExpr(e);
     }
-    // Uniform / Sampler / StorageBuffer don't reference other names.
   }
 
   return names;
 }
 
-function walkStmt(s: Stmt, onExpr: (e: Expr) => void): void {
-  visitStmt(s, { expr: { pre: onExpr } });
+function walkStmt(s: Stmt, onExpr: (e: Expr) => void, onLExpr: (l: LExpr) => void): void {
+  visitStmt(s, {
+    expr: { pre: onExpr },
+    preStmt(stmt) {
+      if (stmt.kind === "Write" || stmt.kind === "Increment" || stmt.kind === "Decrement") {
+        onLExpr(stmt.target);
+      }
+    },
+  });
 }

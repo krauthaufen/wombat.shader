@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>wombat.shader — instanced cubes (WebGPU + Camera UBO)</title>
+  <style>
+    body { margin: 0; background: #111; color: #eee; font-family: system-ui, sans-serif; padding: 1em; }
+    h1 { font-size: 16px; margin: 0 0 0.5em; }
+    main { display: grid; grid-template-columns: auto 1fr; gap: 1em; }
+    canvas { width: 600px; height: 600px; background: #000; }
+    pre { font-size: 11px; line-height: 1.3; color: #bdb; max-height: 80vh; overflow: auto; padding: 0.5em; background: #1a1a1a; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>instanced cubes — Camera UBO drives view/projection, per-instance offsets via instance buffer</h1>
+  <main>
+    <canvas id="c" width="600" height="600"></canvas>
+    <pre id="log"></pre>
+  </main>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

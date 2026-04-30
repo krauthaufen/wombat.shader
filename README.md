@@ -93,16 +93,20 @@ Phase 0 in place; later phases scaffolded but not yet present.
 wombat.shader/                   (npm workspaces; tsc project references)
 ├─ packages/
 │  ├─ ir/         @aardworx/wombat.shader-ir         IR types + visitors + JSON
-│  ├─ passes/     @aardworx/wombat.shader-passes     fold/dce/cse/inline/compose/prune/legalise
+│  ├─ passes/     @aardworx/wombat.shader-passes     fold/dce/cse/inline/compose/prune/lift/legalise
 │  ├─ glsl/       @aardworx/wombat.shader-glsl       IR → GLSL ES 3.00
 │  ├─ wgsl/       @aardworx/wombat.shader-wgsl       IR → WGSL
 │  ├─ types/      @aardworx/wombat.shader-types      shipped .d.ts: V*/M*/sampler*/intrinsics
-│  └─ frontend/   @aardworx/wombat.shader-frontend   TS source → IR (TS Compiler API)
-└─ tests/         vitest e2e: TS source → IR → GLSL/WGSL + per-pass tests
-
-(planned, not yet present: packages/runtime, packages/vite,
-packages/swc; examples/hello-triangle, instanced-cubes,
-compute-particles.)
+│  ├─ frontend/   @aardworx/wombat.shader-frontend   TS source → IR (TS Compiler API)
+│  ├─ runtime/    @aardworx/wombat.shader-runtime    compileShaderSource + WebGL2 / WebGPU
+│  └─ vite/       @aardworx/wombat.shader-vite       build-time shader compilation
+└─ examples/
+   ├─ hello-triangle             WebGL2 — simplest case
+   ├─ hello-triangle-webgpu      WebGPU mirror
+   ├─ textured-quad              WebGL2 + WebGPU side-by-side, sampler + UBO
+   ├─ composition                composeStages fusing two fragments
+   ├─ instanced-cubes            WebGPU — Camera UBO + instance buffer + depth
+   └─ compute-readback           Compute kernel + storage buffer + mapAsync readback
 ```
 
 `@aardworx/wombat.shader-ir` and `@aardworx/wombat.shader-passes` are pure — no DOM, no toolchain.

@@ -50,6 +50,12 @@ const Tf32: Type = { kind: "Float", width: 32 };
 export interface TranslateOptions {
   readonly source: string;
   readonly file?: string;
+  /**
+   * Types the translator should use when it encounters a free
+   * identifier (one not declared as a parameter, let, or const).
+   * Without this every unresolved name defaults to `f32`.
+   */
+  readonly externalTypes?: ReadonlyMap<string, Type>;
 }
 
 export interface TranslatedFunction {
@@ -84,6 +90,8 @@ interface Ctx {
    * Maps the parameter name to a map of field name → IR type.
    */
   readonly inputRecords: Map<string, Map<string, Type>>;
+  /** Types of free identifiers (uniforms / samplers / etc.). */
+  readonly externalTypes: ReadonlyMap<string, Type>;
   readonly diagnostics: Diagnostic[];
 }
 
@@ -100,7 +108,13 @@ export function translateFunction(
   const source = ts.createSourceFile(file, options.source, ts.ScriptTarget.ES2022, true);
   const fn = findFunction(source, fnName);
   if (!fn) throw new TranslationError(`function "${fnName}" not found in ${file}`, []);
-  const ctx: Ctx = { file, source, vars: new Map(), inputRecords: new Map(), diagnostics: [] };
+  const ctx: Ctx = {
+    file, source,
+    vars: new Map(),
+    inputRecords: new Map(),
+    externalTypes: options.externalTypes ?? new Map(),
+    diagnostics: [],
+  };
 
   const params = (fn.parameters ?? []).map((p) => extractParameter(p, ctx));
   const body = fn.body ? translateBlock(fn.body, ctx) : ({ kind: "Nop" } as Stmt);
@@ -414,10 +428,11 @@ function translateExpr(node: ts.Expression, ctx: Ctx): Expr {
 function translateIdentifier(node: ts.Identifier, ctx: Ctx): Expr {
   const v = ctx.vars.get(node.text);
   if (v) return { kind: "Var", var: v, type: v.type };
-  // Unresolved identifier — treat as ReadInput("Uniform"); a smarter
-  // pass would distinguish Input vs Uniform based on shipped builtin
-  // tables. For now uniforms are the common case for free names.
-  return { kind: "ReadInput", scope: "Uniform", name: node.text, type: Tf32 };
+  // Unresolved identifier — try the externalTypes table first (uniform /
+  // sampler / storage names declared at module level), else fall back
+  // to f32. Treat as ReadInput("Uniform").
+  const t = ctx.externalTypes.get(node.text) ?? Tf32;
+  return { kind: "ReadInput", scope: "Uniform", name: node.text, type: t };
 }
 
 function translateBinary(node: ts.BinaryExpression, ctx: Ctx): Expr {

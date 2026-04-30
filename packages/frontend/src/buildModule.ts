@@ -30,11 +30,22 @@ export interface ParseShaderInput {
   readonly source: string;
   readonly file?: string;
   readonly entries: readonly EntryRequest[];
+  /**
+   * Type information for free identifiers the frontend wouldn't be
+   * able to resolve from the source alone (uniforms, samplers, storage
+   * buffers declared at module level). The translator looks here when
+   * it encounters a reference to a name that isn't in scope; without
+   * this it defaults the type to `f32`, which breaks downstream
+   * dispatch (e.g. `m.mul(v)` when `m` is mat4 should produce
+   * MulMatVec, not scalar Mul).
+   */
+  readonly externalTypes?: ReadonlyMap<string, Type>;
 }
 
 export function parseShader(input: ParseShaderInput): Module {
   const opt: TranslateOptions = { source: input.source };
   if (input.file !== undefined) (opt as { file?: string }).file = input.file;
+  if (input.externalTypes) (opt as { externalTypes?: ReadonlyMap<string, Type> }).externalTypes = input.externalTypes;
   const values: ValueDef[] = [];
   for (const req of input.entries) {
     const fn = translateFunction(opt, req.name);
