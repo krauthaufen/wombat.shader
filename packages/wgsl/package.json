@@ -1,7 +1,6 @@
 {
   "name": "@aardworx/wombat.shader-wgsl",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "description": "wombat.shader IR → WGSL emitter (WebGPU target).",
   "license": "MIT",
   "type": "module",
@@ -14,8 +13,14 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "dependencies": {
-    "@aardworx/wombat.shader-ir": "*"
+    "@aardworx/wombat.shader-ir": "0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
