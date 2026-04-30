@@ -8,6 +8,8 @@ export type {
   StructField,
   SamplerTarget,
   SampledType,
+  StorageAccess,
+  StorageTextureFormat,
   // variables / literals
   Var,
   Literal,
@@ -64,3 +66,8 @@ export type { ExprVisitor, StmtVisitor } from "./visit.js";
 
 export { serialise, deserialise } from "./serialize.js";
 export type { IntrinsicRegistry } from "./serialize.js";
+
+export { hashModule, hashValue, combineHashes, stableStringify } from "./hash.js";
+export { prettyPrint } from "./pretty.js";
+export { buildSourceMap } from "./sourcemap.js";
+export type { SourceMap, BuildSourceMapInput } from "./sourcemap.js";

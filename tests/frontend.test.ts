@@ -10,7 +10,7 @@ describe("frontend — minimal fragment shader", () => {
   it("translates a simple fragment to IR + emits GLSL", () => {
     const source = `
       function fsMain(input: { v_color: V3f }): V4f {
-        const c = vec4(input.v_color.x, input.v_color.y, input.v_color.z, 1.0);
+        const c = new V4f(input.v_color.x, input.v_color.y, input.v_color.z, 1.0);
         return c;
       }
     `;
@@ -45,7 +45,7 @@ describe("frontend — minimal fragment shader", () => {
   it("end-to-end: TS source → GLSL", () => {
     const source = `
       function fsMain(input: { v_uv: V2f }): V4f {
-        const tinted = vec4(input.v_uv.x, input.v_uv.y, 0.5, 1.0);
+        const tinted = new V4f(input.v_uv.x, input.v_uv.y, 0.5, 1.0);
         return tinted;
       }
     `;
@@ -78,9 +78,9 @@ describe("frontend — control flow", () => {
     const source = `
       function fsMain(input: { u_t: number }): V4f {
         if (input.u_t > 0.5) {
-          return vec4(1.0, 0.0, 0.0, 1.0);
+          return new V4f(1.0, 0.0, 0.0, 1.0);
         } else {
-          return vec4(0.0, 1.0, 0.0, 1.0);
+          return new V4f(0.0, 1.0, 0.0, 1.0);
         }
       }
     `;
@@ -101,7 +101,7 @@ describe("frontend — control flow", () => {
         for (let i = 0; i < 10; i++) {
           acc = acc + 1.0;
         }
-        return vec4(acc, acc, acc, 1.0);
+        return new V4f(acc, acc, acc, 1.0);
       }
     `;
     const m = parseShader({
@@ -125,7 +125,7 @@ describe("frontend — method calls map to IR ops", () => {
         const sum = input.a.add(input.b);
         const d = input.a.dot(input.b);
         const n = input.a.normalize();
-        return vec4(d, d, d, 1.0);
+        return new V4f(d, d, d, 1.0);
       }
     `;
     const m = parseShader({
@@ -165,7 +165,7 @@ describe("frontend — intrinsics", () => {
       function fsMain(input: { v_uv: V2f; tex: Sampler2D; t: number }): V4f {
         const wave = sin(input.t);
         const sampled = texture(input.tex, input.v_uv);
-        const tinted = mix(sampled, vec4(wave, wave, wave, 1.0), 0.5);
+        const tinted = mix(sampled, new V4f(wave, wave, wave, 1.0), 0.5);
         return tinted;
       }
     `;

@@ -35,11 +35,55 @@ function makePure(name: string, returnTypeOf: (args: readonly Type[]) => Type): 
   };
 }
 
+/** Pure intrinsic with target-specific spellings. */
+function makePureWithEmit(
+  name: string,
+  emit: { glsl: string; wgsl: string },
+  returnTypeOf: (args: readonly Type[]) => Type,
+): IntrinsicRef {
+  return { name, pure: true, emit, returnTypeOf };
+}
+
 const SAMPLER_BIND = (name: string): IntrinsicRef => ({
   name, pure: true, samplerBinding: true,
-  emit: { glsl: name, wgsl: name === "texture" ? "textureSample" : name },
+  emit: {
+    glsl: name,
+    wgsl: name === "texture" ? "textureSample"
+        : name === "texelFetch" ? "textureLoad"
+        : name,
+  },
   returnTypeOf: vec4Result,
 });
+
+function atomicScalar(args: readonly Type[]): Type {
+  // First arg is the atomic storage element reference; result is its
+  // (non-atomic) underlying scalar type. The translator hands us the
+  // pre-inference type (`Int(...)`); after the inference pass the
+  // buffer's element becomes `AtomicI32`/`AtomicU32`, but the call
+  // expression's result type remains the unwrapped scalar.
+  const a = args[0];
+  if (a && a.kind === "AtomicI32") return { kind: "Int", signed: true, width: 32 };
+  if (a && a.kind === "AtomicU32") return { kind: "Int", signed: false, width: 32 };
+  if (a && a.kind === "Int") return a;
+  return { kind: "Int", signed: false, width: 32 };
+}
+function atomicOp(name: string, wgsl: string = name): IntrinsicRef {
+  return {
+    name, pure: false, atomic: true,
+    emit: { glsl: name, wgsl },
+    returnTypeOf: atomicScalar,
+  };
+}
+
+const Tu32: Type = { kind: "Int", signed: false, width: 32 };
+const Ti32: Type = { kind: "Int", signed: true, width: 32 };
+const Tvec2f: Type = Tvec(Tf32, 2);
+const Tvec4f: Type = Tvec(Tf32, 4);
+
+function u32Result(): Type { return Tu32; }
+function i32Result(): Type { return Ti32; }
+function vec2fResult(): Type { return Tvec2f; }
+function vec4fResult(): Type { return Tvec4f; }
 
 export const INTRINSICS: Record<string, IntrinsicRef> = {
   // trig / transcendental
@@ -50,6 +94,15 @@ export const INTRINSICS: Record<string, IntrinsicRef> = {
   acos: makePure("acos", scalarOnly),
   atan: makePure("atan", scalarOnly),
   atan2: makePure("atan", scalarOnly),
+  sinh: makePure("sinh", elementWise),
+  cosh: makePure("cosh", elementWise),
+  tanh: makePure("tanh", elementWise),
+  asinh: makePure("asinh", scalarOnly),
+  acosh: makePure("acosh", scalarOnly),
+  atanh: makePure("atanh", scalarOnly),
+  degrees: makePure("degrees", elementWise),
+  radians: makePure("radians", elementWise),
+  trunc: makePure("trunc", elementWise),
   exp: makePure("exp", elementWise),
   exp2: makePure("exp2", scalarOnly),
   log: makePure("log", scalarOnly),
@@ -74,10 +127,12 @@ export const INTRINSICS: Record<string, IntrinsicRef> = {
   smoothstep: makePure("smoothstep", elementWise),
 
   // geometric
-  length: makePure("length", lengthResult),
+  // `length` / `dot` / `cross` are provided exclusively as method
+  // forms (`v.length()`, `a.dot(b)`, `a.cross(b)`); they translate
+  // to dedicated IR nodes (`Length`, `Dot`, `Cross`) and don't go
+  // through the intrinsic table. Removing the free-function form
+  // eliminates a redundant code path.
   distance: makePure("distance", lengthResult),
-  dot: makePure("dot", dotResult),
-  cross: makePure("cross", elementWise),
   normalize: makePure("normalize", elementWise),
   reflect: makePure("reflect", elementWise),
   refract: makePure("refract", elementWise),
@@ -97,6 +152,131 @@ export const INTRINSICS: Record<string, IntrinsicRef> = {
   textureLod: SAMPLER_BIND("textureLod"),
   textureGrad: SAMPLER_BIND("textureGrad"),
   texelFetch: SAMPLER_BIND("texelFetch"),
+  textureSampleCompare: {
+    name: "textureSampleCompare", pure: true, samplerBinding: true,
+    emit: { glsl: "texture", wgsl: "textureSampleCompare" },
+    returnTypeOf: () => Tf32,
+  },
+  // packing / unpacking — WGSL-name-keyed; GLSL emits the
+  // ES 3.00 spelling. Result types are u32 (pack) or vec*<f32>
+  // (unpack) per the spec.
+  pack2x16float: makePureWithEmit(
+    "pack2x16float",
+    { glsl: "packHalf2x16", wgsl: "pack2x16float" },
+    u32Result,
+  ),
+  unpack2x16float: makePureWithEmit(
+    "unpack2x16float",
+    { glsl: "unpackHalf2x16", wgsl: "unpack2x16float" },
+    vec2fResult,
+  ),
+  pack2x16unorm: makePureWithEmit(
+    "pack2x16unorm",
+    { glsl: "packUnorm2x16", wgsl: "pack2x16unorm" },
+    u32Result,
+  ),
+  unpack2x16unorm: makePureWithEmit(
+    "unpack2x16unorm",
+    { glsl: "unpackUnorm2x16", wgsl: "unpack2x16unorm" },
+    vec2fResult,
+  ),
+  pack2x16snorm: makePureWithEmit(
+    "pack2x16snorm",
+    { glsl: "packSnorm2x16", wgsl: "pack2x16snorm" },
+    u32Result,
+  ),
+  unpack2x16snorm: makePureWithEmit(
+    "unpack2x16snorm",
+    { glsl: "unpackSnorm2x16", wgsl: "unpack2x16snorm" },
+    vec2fResult,
+  ),
+  pack4x8unorm: makePureWithEmit(
+    "pack4x8unorm",
+    { glsl: "packUnorm4x8", wgsl: "pack4x8unorm" },
+    u32Result,
+  ),
+  unpack4x8unorm: makePureWithEmit(
+    "unpack4x8unorm",
+    { glsl: "unpackUnorm4x8", wgsl: "unpack4x8unorm" },
+    vec4fResult,
+  ),
+  pack4x8snorm: makePureWithEmit(
+    "pack4x8snorm",
+    { glsl: "packSnorm4x8", wgsl: "pack4x8snorm" },
+    u32Result,
+  ),
+  unpack4x8snorm: makePureWithEmit(
+    "unpack4x8snorm",
+    { glsl: "unpackSnorm4x8", wgsl: "unpack4x8snorm" },
+    vec4fResult,
+  ),
+
+  // bit ops — WGSL-name-keyed; GLSL emits the ES 3.00 spelling.
+  countOneBits: makePureWithEmit(
+    "countOneBits",
+    { glsl: "bitCount", wgsl: "countOneBits" },
+    i32Result,
+  ),
+  extractBits: makePureWithEmit(
+    "extractBits",
+    { glsl: "bitfieldExtract", wgsl: "extractBits" },
+    elementWise,
+  ),
+  insertBits: makePureWithEmit(
+    "insertBits",
+    { glsl: "bitfieldInsert", wgsl: "insertBits" },
+    elementWise,
+  ),
+  reverseBits: makePureWithEmit(
+    "reverseBits",
+    { glsl: "bitfieldReverse", wgsl: "reverseBits" },
+    elementWise,
+  ),
+  firstLeadingBit: makePureWithEmit(
+    "firstLeadingBit",
+    { glsl: "findMSB", wgsl: "firstLeadingBit" },
+    i32Result,
+  ),
+  firstTrailingBit: makePureWithEmit(
+    "firstTrailingBit",
+    { glsl: "findLSB", wgsl: "firstTrailingBit" },
+    i32Result,
+  ),
+
+  // atomics — first arg is a storage element ref; emitter prepends `&`.
+  atomicLoad: atomicOp("atomicLoad"),
+  atomicStore: { name: "atomicStore", pure: false, atomic: true,
+    emit: { glsl: "atomicStore", wgsl: "atomicStore" },
+    returnTypeOf: () => ({ kind: "Void" }) },
+  atomicAdd: atomicOp("atomicAdd"),
+  atomicSub: atomicOp("atomicSub"),
+  atomicMin: atomicOp("atomicMin"),
+  atomicMax: atomicOp("atomicMax"),
+  atomicAnd: atomicOp("atomicAnd"),
+  atomicOr: atomicOp("atomicOr"),
+  atomicXor: atomicOp("atomicXor"),
+  atomicExchange: atomicOp("atomicExchange"),
+  atomicCompareExchangeWeak: atomicOp("atomicCompareExchangeWeak"),
+
+  // textureStore writes to a storage-texture element; impure so DCE keeps it.
+  textureStore: {
+    name: "textureStore", pure: false, samplerBinding: true,
+    emit: { glsl: "imageStore", wgsl: "textureStore" },
+    returnTypeOf: () => ({ kind: "Void" }),
+  },
+  // textureLoad reads a texel — same WGSL spelling for sampled and
+  // storage textures. We rely on the surrounding type to disambiguate.
+  textureLoad: {
+    name: "textureLoad", pure: true, samplerBinding: true,
+    emit: { glsl: "imageLoad", wgsl: "textureLoad" },
+    returnTypeOf: vec4Result,
+  },
+  textureGather: {
+    name: "textureGather", pure: true, samplerBinding: true,
+    emit: { glsl: "textureGather", wgsl: "textureGather" },
+    returnTypeOf: vec4Result,
+  },
+
   textureSize: makePure("textureSize", (args) => {
     // returns ivec of texture's dimensionality
     const a = args[0];

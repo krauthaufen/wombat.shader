@@ -301,6 +301,7 @@ function typeId(t: Type): string {
     case "Struct": return `struct:${t.name}`;
     case "Sampler": return `sampler:${t.target}:${t.sampled.kind}:${t.comparison}`;
     case "Texture": return `texture:${t.target}:${t.sampled.kind}:${t.arrayed}:${t.multisampled}`;
+    case "StorageTexture": return `texture_storage:${t.target}:${t.format}:${t.access}:${t.arrayed}`;
     case "AtomicI32": return "atomic<i32>";
     case "AtomicU32": return "atomic<u32>";
     case "Intrinsic": return `intrinsic:${t.name}`;

@@ -22,7 +22,7 @@ function vsMain(input: { a_position: V2f; a_uv: V2f })
   : { gl_Position: V4f; v_uv: V2f }
 {
   return {
-    gl_Position: vec4(input.a_position.x, input.a_position.y, 0.0, 1.0),
+    gl_Position: new V4f(input.a_position.x, input.a_position.y, 0.0, 1.0),
     v_uv: input.a_uv,
   };
 }
@@ -34,7 +34,7 @@ function base(input: { v_uv: V2f })
   const cx = input.v_uv.x - 0.5;
   const cy = input.v_uv.y - 0.5;
   const r = sqrt(cx * cx + cy * cy);
-  return { base_color: vec3(0.4 + 0.6 * (1.0 - r), 0.2, 0.8 - 0.6 * r) };
+  return { base_color: new V3f(0.4 + 0.6 * (1.0 - r), 0.2, 0.8 - 0.6 * r) };
 }
 
 // Stage B: colour grade — boosts saturation per channel.
@@ -42,8 +42,8 @@ function base(input: { v_uv: V2f })
 function colourGrade(input: { base_color: V3f })
   : { outColor: V4f }
 {
-  const tint = vec3(input.base_color.x * 1.4, input.base_color.y + 0.2, input.base_color.z * 1.2);
-  return { outColor: vec4(tint.x, tint.y, tint.z, 1.0) };
+  const tint = new V3f(input.base_color.x * 1.4, input.base_color.y + 0.2, input.base_color.z * 1.2);
+  return { outColor: new V4f(tint.x, tint.y, tint.z, 1.0) };
 }
 `;
 

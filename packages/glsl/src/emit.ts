@@ -24,6 +24,8 @@ export interface EmitResult {
   readonly source: string;
   readonly bindings: BindingMap;
   readonly meta: BackendMeta;
+  /** Per-emitted-line spans for source-map construction. */
+  readonly lineSpans: ReadonlyArray<import("@aardworx/wombat.shader-ir").Span | undefined>;
 }
 
 export interface BindingMap {
@@ -113,6 +115,7 @@ export function emitGlsl(module: Module, entryName?: string): EmitResult {
       version: "300 es",
       workgroupSize: undefined,
     },
+    lineSpans: w.lineSpans,
   };
 }
 
@@ -150,12 +153,19 @@ function pickEntry(module: Module, entryName?: string): EntryDef {
 class Writer {
   private readonly parts: string[] = [];
   private indent = 0;
+  private currentSpan: import("@aardworx/wombat.shader-ir").Span | undefined;
+  readonly lineSpans: (import("@aardworx/wombat.shader-ir").Span | undefined)[] = [];
 
   line(s: string): void {
     this.parts.push("    ".repeat(this.indent) + s + "\n");
+    this.lineSpans.push(this.currentSpan);
   }
   blank(): void {
     this.parts.push("\n");
+    this.lineSpans.push(undefined);
+  }
+  setSpan(s: import("@aardworx/wombat.shader-ir").Span | undefined): void {
+    this.currentSpan = s;
   }
   push(s: string): void {
     this.parts.push(s);
@@ -295,6 +305,7 @@ function emitEntryMain(ctx: Ctx, e: EntryDef): void {
 // ─────────────────────────────────────────────────────────────────────
 
 function emitStmt(ctx: Ctx, s: Stmt): void {
+  if (s.span) ctx.out.setSpan(s.span);
   switch (s.kind) {
     case "Nop":
       return;
@@ -450,6 +461,12 @@ export function expr(e: Expr): string {
     case "Call":
       return `${e.fn.signature.name}(${e.args.map(expr).join(", ")})`;
     case "CallIntrinsic":
+      if (e.op.atomic) {
+        throw new Error(
+          `emitGlsl: atomic intrinsic "${e.op.name}" is not supported on WebGL2 (GLSL ES 3.00). ` +
+          `Atomics require WGSL/WebGPU or GLSL ES 3.10+.`,
+        );
+      }
       return `${e.op.emit.glsl}(${e.args.map(expr).join(", ")})`;
     case "Conditional":
       return `((${expr(e.cond)}) ? (${expr(e.ifTrue)}) : (${expr(e.ifFalse)}))`;
@@ -633,6 +650,11 @@ function typeStr(t: Type): string {
         sampled: t.sampled,
         comparison: false,
       });
+    case "StorageTexture":
+      throw new Error(
+        `emitGlsl: storage textures (texture_storage_*) are not supported on ` +
+        `WebGL2 (GLSL ES 3.00). Use the WGSL/WebGPU target.`,
+      );
     case "AtomicI32": return "int";
     case "AtomicU32": return "uint";
     case "Intrinsic":
@@ -641,6 +663,12 @@ function typeStr(t: Type): string {
 }
 
 function samplerTypeStr(t: { target: string; sampled: { kind: "Float" } | { kind: "Int"; signed: boolean }; comparison: boolean }): string {
+  if (t.target === "2DMS" || t.target === "2DMSArray") {
+    throw new Error(
+      `emitGlsl: multisampled samplers (target=${t.target}) are not supported on ` +
+      `WebGL2 (GLSL ES 3.00). Use the WGSL/WebGPU target.`,
+    );
+  }
   const prefix = t.sampled.kind === "Float"
     ? ""
     : t.sampled.signed ? "i" : "u";

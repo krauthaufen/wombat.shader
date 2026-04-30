@@ -18,6 +18,7 @@
   "dependencies": {
     "@aardworx/wombat.shader-frontend": "*",
     "@aardworx/wombat.shader-ir": "*",
+    "@aardworx/wombat.shader-passes": "*",
     "@aardworx/wombat.shader-runtime": "*"
   },
   "peerDependencies": {

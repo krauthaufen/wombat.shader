@@ -37,15 +37,15 @@ export interface FragmentBuiltinOut {
 
 // ─── compute stage builtins ───────────────────────────────────────────
 
-import type { V3u } from "./vectors.js";
+import type { V3ui } from "./vectors.js";
 
 export interface ComputeBuiltins {
   /** Global invocation in `[0, dispatchSize)`. */
-  readonly globalInvocationId: V3u;
+  readonly globalInvocationId: V3ui;
   /** Local invocation in `[0, workgroupSize)`. */
-  readonly localInvocationId: V3u;
+  readonly localInvocationId: V3ui;
   /** Workgroup ID in `[0, dispatchSize / workgroupSize)`. */
-  readonly workgroupId: V3u;
+  readonly workgroupId: V3ui;
   /** Number of workgroups in the dispatch. */
-  readonly numWorkgroups: V3u;
+  readonly numWorkgroups: V3ui;
 }

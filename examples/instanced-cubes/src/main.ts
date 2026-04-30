@@ -23,11 +23,11 @@ const SHADER = `
 function vsMain(input: { a_position: V3f; a_normal: V3f; a_offset: V3f })
   : { gl_Position: V4f; v_normal: V3f; v_world: V3f }
 {
-  const world = vec3(input.a_position.x + input.a_offset.x,
+  const world = new V3f(input.a_position.x + input.a_offset.x,
                      input.a_position.y + input.a_offset.y,
                      input.a_position.z + input.a_offset.z);
   return {
-    gl_Position: u_camera_projection.mul(u_camera_view.mul(vec4(world.x, world.y, world.z, 1.0))),
+    gl_Position: u_camera_projection.mul(u_camera_view.mul(new V4f(world.x, world.y, world.z, 1.0))),
     v_normal: input.a_normal,
     v_world: world,
   };
@@ -37,15 +37,15 @@ function fsMain(input: { v_normal: V3f; v_world: V3f })
   : { outColor: V4f }
 {
   // Lambertian-ish shade against a fixed light direction.
-  const lightDir = vec3(0.577, 0.577, 0.577);
+  const lightDir = new V3f(0.577, 0.577, 0.577);
   const ndotl = max(input.v_normal.x * lightDir.x + input.v_normal.y * lightDir.y + input.v_normal.z * lightDir.z, 0.0);
   const ambient = 0.3;
   // Tint by world-space y so cubes higher up are bluer.
   const heightHue = 0.5 + 0.05 * input.v_world.y;
-  const lit = vec3(0.9 * (ambient + 0.7 * ndotl) * (1.0 - heightHue * 0.4),
+  const lit = new V3f(0.9 * (ambient + 0.7 * ndotl) * (1.0 - heightHue * 0.4),
                    0.6 * (ambient + 0.7 * ndotl) * 0.8,
                    1.0 * (ambient + 0.7 * ndotl) * heightHue);
-  return { outColor: vec4(lit.x, lit.y, lit.z, 1.0) };
+  return { outColor: new V4f(lit.x, lit.y, lit.z, 1.0) };
 }
 `;
 

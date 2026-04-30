@@ -56,6 +56,30 @@ export interface TranslateOptions {
    * Without this every unresolved name defaults to `f32`.
    */
   readonly externalTypes?: ReadonlyMap<string, Type>;
+  /**
+   * Closure-captured identifiers: name → IR type. Free identifiers
+   * matching one of these names lower to `ReadInput("Closure", name)`
+   * instead of `ReadInput("Uniform", name)`. The build plugin
+   * populates this from the arrow function's lexical environment so
+   * the runtime `resolveHoles` pass can substitute the captured
+   * values at compile time.
+   */
+  readonly closureTypes?: ReadonlyMap<string, Type>;
+  /**
+   * Uniform namespaces: `nsName → { fieldName → IR type }`. Property
+   * accesses through `nsName` lower directly to
+   * `ReadInput("Uniform", fieldName, type)`. The build plugin
+   * populates this from `declare const u: { … }` ambient declarations
+   * so `u.tint` in the body emits a uniform read for `tint`.
+   */
+  readonly uniformNamespaces?: ReadonlyMap<string, ReadonlyMap<string, Type>>;
+  /**
+   * Pre-computed signatures for top-level helper functions in the
+   * same source. When a body calls one of these by name, the
+   * translator emits a properly-typed `Call(FunctionRef)` instead of
+   * the unresolved `Call(stub)` path.
+   */
+  readonly helperSignatures?: ReadonlyMap<string, import("@aardworx/wombat.shader-ir").FunctionSignature>;
 }
 
 export interface TranslatedFunction {
@@ -84,16 +108,80 @@ interface Ctx {
   /** name → Var, used to map identifier reads to interned IR Vars. */
   readonly vars: Map<string, Var>;
   /**
+   * Top-level `const NAME = literal;` declarations. Lookups inline
+   * the literal at the use site so the emitter never sees a dangling
+   * identifier. Values are stored as fully-typed `Expr`s (Const nodes
+   * for numeric/boolean literals).
+   */
+  readonly moduleConsts: Map<string, Expr>;
+  /**
    * Parameters whose TS type was an object-type-literal (e.g.
    * `input: { v_color: V3f }`) — treated as input-record placeholders.
    * Property accesses through them translate to `ReadInput("Input")`.
    * Maps the parameter name to a map of field name → IR type.
    */
   readonly inputRecords: Map<string, Map<string, Type>>;
+  /**
+   * Parameters typed `ComputeBuiltins` (and similar). Property accesses
+   * through them translate to `ReadInput("Builtin", <semantic>)`. The
+   * map's value is the field-name → IR type; the parameter name is
+   * never read in the body.
+   */
+  readonly builtinRecords: Map<string, Map<string, { type: Type; semantic: BuiltinName }>>;
   /** Types of free identifiers (uniforms / samplers / etc.). */
   readonly externalTypes: ReadonlyMap<string, Type>;
+  /** Types of closure-captured identifiers (build-plugin-provided). */
+  readonly closureTypes: ReadonlyMap<string, Type>;
+  /** Uniform namespaces (build-plugin-provided). */
+  readonly uniformNamespaces: ReadonlyMap<string, ReadonlyMap<string, Type>>;
+  /** Pre-computed signatures for top-level helper functions. */
+  readonly helperSignatures: ReadonlyMap<string, import("@aardworx/wombat.shader-ir").FunctionSignature>;
   readonly diagnostics: Diagnostic[];
 }
+
+// ─── Builtin parameter-shape recognition ────────────────────────────
+//
+// camelCase (TS) → snake_case (BuiltinSemantic in IR).
+
+type BuiltinName =
+  | "global_invocation_id"
+  | "local_invocation_id"
+  | "local_invocation_index"
+  | "workgroup_id"
+  | "num_workgroups"
+  | "vertex_index"
+  | "instance_index"
+  | "front_facing"
+  | "frag_depth"
+  | "position";
+
+const Tu32: Type = { kind: "Int", signed: false, width: 32 };
+const Tvec3u: Type = { kind: "Vector", element: Tu32, dim: 3 };
+const Tvec4f: Type = { kind: "Vector", element: { kind: "Float", width: 32 }, dim: 4 };
+const Tvec2f: Type = { kind: "Vector", element: { kind: "Float", width: 32 }, dim: 2 };
+
+const COMPUTE_BUILTINS: Record<string, { type: Type; semantic: BuiltinName }> = {
+  globalInvocationId: { type: Tvec3u, semantic: "global_invocation_id" },
+  localInvocationId:  { type: Tvec3u, semantic: "local_invocation_id" },
+  localInvocationIndex: { type: Tu32, semantic: "local_invocation_index" },
+  workgroupId:        { type: Tvec3u, semantic: "workgroup_id" },
+  numWorkgroups:      { type: Tvec3u, semantic: "num_workgroups" },
+};
+const VERTEX_BUILTIN_IN: Record<string, { type: Type; semantic: BuiltinName }> = {
+  vertexIndex:   { type: Tu32, semantic: "vertex_index" },
+  instanceIndex: { type: Tu32, semantic: "instance_index" },
+};
+const FRAGMENT_BUILTIN_IN: Record<string, { type: Type; semantic: BuiltinName }> = {
+  fragCoord:    { type: Tvec4f, semantic: "position" },
+  frontFacing:  { type: { kind: "Bool" }, semantic: "front_facing" },
+  pointCoord:   { type: Tvec2f, semantic: "position" },
+};
+
+const BUILTIN_PARAM_SHAPES: Record<string, Record<string, { type: Type; semantic: BuiltinName }>> = {
+  ComputeBuiltins: COMPUTE_BUILTINS,
+  VertexBuiltinIn: VERTEX_BUILTIN_IN,
+  FragmentBuiltinIn: FRAGMENT_BUILTIN_IN,
+};
 
 // ─────────────────────────────────────────────────────────────────────
 // Public entry: translate an arrow function or function declaration
@@ -111,8 +199,13 @@ export function translateFunction(
   const ctx: Ctx = {
     file, source,
     vars: new Map(),
+    moduleConsts: collectModuleConsts(source),
     inputRecords: new Map(),
+    builtinRecords: new Map(),
     externalTypes: options.externalTypes ?? new Map(),
+    closureTypes: options.closureTypes ?? new Map(),
+    uniformNamespaces: options.uniformNamespaces ?? new Map(),
+    helperSignatures: options.helperSignatures ?? new Map(),
     diagnostics: [],
   };
 
@@ -173,6 +266,18 @@ function extractParameter(p: ts.ParameterDeclaration, ctx: Ctx): { name: string;
   if (!ts.isIdentifier(p.name)) {
     addDiagnostic(ctx, p, "frontend: parameter must be a simple identifier (no destructuring)");
     return { name: "_anon", type: Tvoid };
+  }
+  // Builtin record (e.g. `b: ComputeBuiltins`). Property accesses
+  // through it lower to `ReadInput("Builtin", <semantic>)`.
+  if (p.type && ts.isTypeReferenceNode(p.type) && ts.isIdentifier(p.type.typeName)) {
+    const shape = BUILTIN_PARAM_SHAPES[p.type.typeName.text];
+    if (shape) {
+      const fields = new Map<string, { type: Type; semantic: BuiltinName }>(Object.entries(shape));
+      ctx.builtinRecords.set(p.name.text, fields);
+      const placeholder: Var = { name: p.name.text, type: Tvoid, mutable: false };
+      ctx.vars.set(p.name.text, placeholder);
+      return { name: p.name.text, type: Tvoid };
+    }
   }
   // Object-type-literal parameter: treat as an input record. Each
   // member becomes a separately resolvable input via property access.
@@ -237,10 +342,22 @@ function translateBlock(block: ts.Block, ctx: Ctx): Stmt {
 }
 
 function translateStmt(node: ts.Statement, ctx: Ctx): Stmt {
+  return tagStmt(node, ctx, translateStmtInner(node, ctx));
+}
+
+function translateStmtInner(node: ts.Statement, ctx: Ctx): Stmt {
   if (ts.isVariableStatement(node)) return translateVarDecl(node, ctx);
   if (ts.isExpressionStatement(node)) {
     const e = translateAssignmentLikeExpression(node.expression, ctx);
     if (e) return e; // statement-yielding form (e.g. assignment)
+    // Barrier intrinsics lower directly to Barrier statements.
+    const expr = node.expression;
+    if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression)) {
+      const name = expr.expression.text;
+      if (name === "workgroupBarrier") return { kind: "Barrier", scope: "workgroup" };
+      if (name === "storageBarrier")   return { kind: "Barrier", scope: "storage" };
+      if (name === "discard")          return { kind: "Discard" };
+    }
     return { kind: "Expression", value: translateExpr(node.expression, ctx) };
   }
   if (ts.isReturnStatement(node)) {
@@ -388,6 +505,10 @@ const COMPOUND_OPS: Record<number, "Add" | "Sub" | "Mul" | "Div" | "Mod"> = {
 // ─────────────────────────────────────────────────────────────────────
 
 function translateExpr(node: ts.Expression, ctx: Ctx): Expr {
+  return tagExpr(node, ctx, translateExprInner(node, ctx));
+}
+
+function translateExprInner(node: ts.Expression, ctx: Ctx): Expr {
   if (ts.isParenthesizedExpression(node)) return translateExpr(node.expression, ctx);
   if (ts.isIdentifier(node)) return translateIdentifier(node, ctx);
   if (ts.isNumericLiteral(node) || node.kind === ts.SyntaxKind.NumericLiteral) {
@@ -414,9 +535,15 @@ function translateExpr(node: ts.Expression, ctx: Ctx): Expr {
   }
   if (ts.isNewExpression(node)) return translateNew(node, ctx);
   if (ts.isAsExpression(node)) {
-    // `expr as T` — adopt the asserted type but keep the value.
+    // `expr as T`: for scalar-primitive targets (i32/u32/f32/bool) emit
+    // a Convert so WGSL/GLSL get the right cast op. For other targets
+    // (e.g. vector shape annotation), relabel without a Convert.
     const inner = translateExpr(node.expression, ctx);
     const type = typeFromNode(node.type, ctx);
+    if (isScalarPrimitive(type) && isScalarPrimitive(inner.type)
+        && !sameScalar(type, inner.type)) {
+      return { kind: "Convert", value: inner, type };
+    }
     return { ...inner, type } as Expr;
   }
   if (ts.isObjectLiteralExpression(node)) return translateObjectLiteral(node, ctx);
@@ -428,6 +555,14 @@ function translateExpr(node: ts.Expression, ctx: Ctx): Expr {
 function translateIdentifier(node: ts.Identifier, ctx: Ctx): Expr {
   const v = ctx.vars.get(node.text);
   if (v) return { kind: "Var", var: v, type: v.type };
+  const k = ctx.moduleConsts.get(node.text);
+  if (k) return k;
+  // Closure-captured identifiers (build-plugin-supplied) take
+  // precedence over uniforms — same name in both maps means closure.
+  const closureType = ctx.closureTypes.get(node.text);
+  if (closureType) {
+    return { kind: "ReadInput", scope: "Closure", name: node.text, type: closureType };
+  }
   // Unresolved identifier — try the externalTypes table first (uniform /
   // sampler / storage names declared at module level), else fall back
   // to f32. Treat as ReadInput("Uniform").
@@ -489,8 +624,26 @@ function translatePrefixUnary(node: ts.PrefixUnaryExpression, ctx: Ctx): Expr {
 }
 
 function translateCall(node: ts.CallExpression, ctx: Ctx): Expr {
-  // Method call?
+  // Property-access call: either a static factory on a shipped type
+  // (`M44f.fromCols(...)`, `V4f.zero` — wait, fields are not calls)
+  // or an instance method (`v.add(other)`).
   if (ts.isPropertyAccessExpression(node.expression)) {
+    // Static factory on a shipped math type? `M44f.fromCols(...)` and
+    // `M44f.fromRows(...)` lower directly to the matching IR node.
+    if (ts.isIdentifier(node.expression.expression)) {
+      const typeName = node.expression.expression.text;
+      const methodName = node.expression.name.text;
+      const knownType = tryResolveTypeName(typeName);
+      if (knownType && knownType.kind === "Matrix") {
+        const args = node.arguments.map((a) => translateExpr(a, ctx));
+        if (methodName === "fromCols") {
+          return { kind: "MatrixFromCols", cols: args, type: knownType };
+        }
+        if (methodName === "fromRows") {
+          return { kind: "MatrixFromRows", rows: args, type: knownType };
+        }
+      }
+    }
     const target = translateExpr(node.expression.expression, ctx);
     const method = node.expression.name.text;
     const args = node.arguments.map((a) => translateExpr(a, ctx));
@@ -500,21 +653,26 @@ function translateCall(node: ts.CallExpression, ctx: Ctx): Expr {
   if (ts.isIdentifier(node.expression)) {
     const name = node.expression.text;
     const args = node.arguments.map((a) => translateExpr(a, ctx));
-    // 1. Vector / matrix constructor (vec3, mat4, …)?
-    const ctorType = constructorTargetType(name);
-    if (ctorType) {
-      if (ctorType.kind === "Vector") return { kind: "NewVector", components: args, type: ctorType };
-      if (ctorType.kind === "Matrix") return { kind: "MatrixFromCols", cols: args, type: ctorType };
-    }
-    // 2. Known intrinsic?
+    // 1. Known intrinsic? (Note: `vec*()` / `mat*()` constructor
+    //    calls were dropped — users write `new V*f(...)` /
+    //    `M*f.fromCols(...)` instead, both of which work for CPU
+    //    and GPU code via wombat.base.)
     const intr = lookupIntrinsic(name);
     if (intr) {
       const argTypes = args.map((a) => a.type);
       return { kind: "CallIntrinsic", op: intr, args, type: intr.returnTypeOf(argTypes) };
     }
-    // 3. User function — synthesise a FunctionRef stub. The caller
-    //    Module-level pass should match this against a user `Function`
-    //    decl by id; for now we just record the call.
+    // 3. Known helper function — emit a properly-typed Call.
+    const sig = ctx.helperSignatures.get(name);
+    if (sig) {
+      return {
+        kind: "Call",
+        fn: { id: name, signature: sig, pure: true },
+        args,
+        type: sig.returnType,
+      };
+    }
+    // 4. Unknown — leave as Call(stub) and emit a diagnostic.
     addDiagnostic(ctx, node, `frontend: unknown function "${name}" — leaving as Call(stub)`);
     return {
       kind: "Call",
@@ -550,9 +708,43 @@ function translateMethodCall(
     }
     case "cross": return { kind: "Cross", lhs: target, rhs: args[0]!, type: target.type };
     case "length": return { kind: "Length", value: target, type: Tf32 };
+    case "lengthSquared":
+      // No native intrinsic; lower to dot(v, v).
+      return { kind: "Dot", lhs: target, rhs: target, type: Tf32 };
+    case "distance":
+    case "distanceSquared": {
+      const intr = lookupIntrinsic("distance")!;
+      const dist: Expr = { kind: "CallIntrinsic", op: intr, args: [target, args[0]!], type: Tf32 };
+      if (method === "distance") return dist;
+      return { kind: "Mul", lhs: dist, rhs: dist, type: Tf32 };
+    }
     case "normalize": {
       const intr = lookupIntrinsic("normalize")!;
       return { kind: "CallIntrinsic", op: intr, args: [target], type: target.type };
+    }
+    // Element-wise math methods → existing intrinsic table.
+    case "abs":
+    case "floor":
+    case "ceil":
+    case "round":
+    case "fract":
+    case "sign": {
+      const intr = lookupIntrinsic(method)!;
+      return { kind: "CallIntrinsic", op: intr, args: [target], type: target.type };
+    }
+    case "min":
+    case "max": {
+      const intr = lookupIntrinsic(method)!;
+      return { kind: "CallIntrinsic", op: intr, args: [target, args[0]!], type: target.type };
+    }
+    case "clamp": {
+      const intr = lookupIntrinsic("clamp")!;
+      return { kind: "CallIntrinsic", op: intr, args: [target, args[0]!, args[1]!], type: target.type };
+    }
+    case "lerp":
+    case "mix": {
+      const intr = lookupIntrinsic("mix")!;
+      return { kind: "CallIntrinsic", op: intr, args: [target, args[0]!, args[1]!], type: target.type };
     }
     case "transpose": {
       // transpose flips matrix dims.
@@ -608,6 +800,25 @@ function translateProperty(node: ts.PropertyAccessExpression, ctx: Ctx): Expr {
       const fieldType = fields.get(fieldName) ?? Tf32;
       return { kind: "ReadInput", scope: "Input", name: fieldName, type: fieldType };
     }
+    // Uniform namespace: `u.field` lowers to ReadInput("Uniform").
+    const ns = ctx.uniformNamespaces.get(node.expression.text);
+    if (ns) {
+      const fieldName = node.name.text;
+      const fieldType = ns.get(fieldName);
+      if (fieldType) {
+        return { kind: "ReadInput", scope: "Uniform", name: fieldName, type: fieldType };
+      }
+      addDiagnostic(ctx, node, `frontend: unknown uniform "${fieldName}" on namespace "${node.expression.text}"`);
+    }
+    const builtins = ctx.builtinRecords.get(node.expression.text);
+    if (builtins) {
+      const fieldName = node.name.text;
+      const entry = builtins.get(fieldName);
+      if (entry) {
+        return { kind: "ReadInput", scope: "Builtin", name: entry.semantic, type: entry.type };
+      }
+      addDiagnostic(ctx, node, `frontend: unknown builtin "${fieldName}" on ${node.expression.text}`);
+    }
   }
   const target = translateExpr(node.expression, ctx);
   const propName = node.name.text;
@@ -661,7 +872,8 @@ function translateElement(node: ts.ElementAccessExpression, ctx: Ctx): Expr {
       type: { kind: "Vector", element: target.type.element, dim: target.type.rows },
     };
   }
-  return { kind: "Item", target, index, type: Tf32 };
+  const elementType = target.type.kind === "Array" ? target.type.element : Tf32;
+  return { kind: "Item", target, index, type: elementType };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -672,6 +884,15 @@ function translateLExpr(node: ts.Expression, ctx: Ctx): LExpr {
   if (ts.isIdentifier(node)) {
     const v = ctx.vars.get(node.text);
     if (v) return { kind: "LVar", var: v, type: v.type };
+    // Free identifier — assume it's a module-level binding (uniform,
+    // sampler, storage buffer). Use the externalTypes table to give the
+    // synthetic Var the right type so subsequent indexing knows the
+    // element type, and storage-access inference can identify it.
+    const externalType = ctx.externalTypes.get(node.text);
+    if (externalType) {
+      const synth: Var = { name: node.text, type: externalType, mutable: true };
+      return { kind: "LVar", var: synth, type: externalType };
+    }
     addDiagnostic(ctx, node, `frontend: writing to undeclared identifier "${node.text}"`);
     return { kind: "LVar", var: { name: node.text, type: Tvoid, mutable: true }, type: Tvoid };
   }
@@ -693,7 +914,12 @@ function translateLExpr(node: ts.Expression, ctx: Ctx): LExpr {
   if (ts.isElementAccessExpression(node)) {
     const target = translateLExpr(node.expression, ctx);
     const index = translateExpr(node.argumentExpression, ctx);
-    return { kind: "LItem", target, index, type: Tf32 };
+    const elementType = target.type.kind === "Array"
+      ? target.type.element
+      : target.type.kind === "Vector"
+      ? target.type.element
+      : Tf32;
+    return { kind: "LItem", target, index, type: elementType };
   }
   addDiagnostic(ctx, node, `frontend: unsupported assignment target (${ts.SyntaxKind[node.kind]})`);
   return { kind: "LVar", var: { name: "_err", type: Tvoid, mutable: true }, type: Tvoid };
@@ -783,6 +1009,102 @@ function translateObjectLiteral(node: ts.ObjectLiteralExpression, ctx: Ctx): Exp
     writable: false,
   });
   return carrier;
+}
+
+function collectModuleConsts(source: ts.SourceFile): Map<string, Expr> {
+  // Top-level `const X = <numeric/boolean literal>;` declarations.
+  // Inlined at the use site so the emitter never sees a dangling free
+  // identifier. We only handle plain numeric and boolean literals (and
+  // unary-minus numerics) — anything else stays unresolved and falls
+  // through to the externalTypes path.
+  const out = new Map<string, Expr>();
+  ts.forEachChild(source, (node) => {
+    if (!ts.isVariableStatement(node)) return;
+    const isConst = (node.declarationList.flags & ts.NodeFlags.Const) !== 0;
+    if (!isConst) return;
+    for (const d of node.declarationList.declarations) {
+      if (!ts.isIdentifier(d.name) || !d.initializer) continue;
+      const lit = literalToConst(d.initializer);
+      if (lit) out.set(d.name.text, lit);
+    }
+  });
+  return out;
+}
+
+function literalToConst(e: ts.Expression): Expr | undefined {
+  if (ts.isNumericLiteral(e) || e.kind === ts.SyntaxKind.NumericLiteral) {
+    const text = e.getText();
+    const isInt = !/[.eE]/.test(text);
+    if (isInt) {
+      return { kind: "Const", value: { kind: "Int", signed: true, value: parseInt(text, 10) }, type: Ti32 };
+    }
+    return { kind: "Const", value: { kind: "Float", value: parseFloat(text) }, type: Tf32 };
+  }
+  if (e.kind === ts.SyntaxKind.TrueKeyword) return { kind: "Const", value: { kind: "Bool", value: true }, type: Tbool };
+  if (e.kind === ts.SyntaxKind.FalseKeyword) return { kind: "Const", value: { kind: "Bool", value: false }, type: Tbool };
+  if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.MinusToken) {
+    const inner = literalToConst(e.operand);
+    if (inner && inner.kind === "Const") {
+      if (inner.value.kind === "Int") {
+        return { kind: "Const", value: { ...inner.value, value: -inner.value.value }, type: inner.type };
+      }
+      if (inner.value.kind === "Float") {
+        return { kind: "Const", value: { ...inner.value, value: -inner.value.value }, type: inner.type };
+      }
+    }
+  }
+  return undefined;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Span propagation
+//
+// Every translated Stmt and Expr gets tagged with the originating
+// TS span so the WGSL/GLSL emitters can build a v3 source map back
+// to the user's TS source. We wrap `translateStmt` / `translateExpr`
+// at the entry points; nested calls go through the wrappers so the
+// whole IR ends up tagged. Helpers (e.g. `translateBlock`,
+// `translateMethodCall`) return Exprs/Stmts that already carry the
+// inner span — we let the outer wrapper override with the more
+// specific node's span if it's a different range.
+// ─────────────────────────────────────────────────────────────────────
+
+function spanOf(node: ts.Node, ctx: Ctx): { file: string; start: number; end: number } {
+  return { file: ctx.file, start: node.getStart(ctx.source), end: node.getEnd() };
+}
+
+function tagStmt(node: ts.Node, ctx: Ctx, s: Stmt): Stmt {
+  // Don't overwrite a more specific span an inner call set —
+  // pre-existing span typically points at a child node which is
+  // strictly narrower than `node` and more useful for the source map.
+  if (s.span) return s;
+  return { ...s, span: spanOf(node, ctx) } as Stmt;
+}
+
+function tagExpr(node: ts.Node, ctx: Ctx, e: Expr): Expr {
+  if (e.span) return e;
+  const tagged = { ...e, span: spanOf(node, ctx) } as Expr;
+  // The object-literal-return carrier from `translateObjectLiteral`
+  // stashes its field map on a non-enumerable `_record` field. The
+  // spread above strips it — re-attach so liftReturns still finds it.
+  const record = (e as { _record?: ReadonlyMap<string, Expr> })._record;
+  if (record !== undefined) {
+    Object.defineProperty(tagged, "_record", {
+      value: record, enumerable: false, writable: false,
+    });
+  }
+  return tagged;
+}
+
+function isScalarPrimitive(t: Type): boolean {
+  return t.kind === "Int" || t.kind === "Float" || t.kind === "Bool";
+}
+function sameScalar(a: Type, b: Type): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "Int" && b.kind === "Int") {
+    return a.signed === b.signed && a.width === b.width;
+  }
+  return true;
 }
 
 function describeType(t: Type): string {

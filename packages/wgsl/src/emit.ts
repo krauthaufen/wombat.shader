@@ -32,6 +32,13 @@ export interface EmitResult {
   readonly source: string;
   readonly bindings: BindingMap;
   readonly meta: BackendMeta;
+  /**
+   * Per-emitted-line spans (`undefined` for unmapped lines such as
+   * blank lines and infrastructure scaffolding). Length matches the
+   * line count in `source`. Used by the runtime to build a
+   * `SourceMap` keyed on the user's TS file.
+   */
+  readonly lineSpans: ReadonlyArray<import("@aardworx/wombat.shader-ir").Span | undefined>;
 }
 
 export interface BindingMap {
@@ -114,6 +121,7 @@ export function emitWgsl(module: Module, entryName?: string): EmitResult {
       version: "wgsl",
       workgroupSize: workgroupSize(entry),
     },
+    lineSpans: w.lineSpans,
   };
 }
 
@@ -158,11 +166,23 @@ function pickEntry(module: Module, entryName?: string): EntryDef {
 class Writer {
   private readonly parts: string[] = [];
   private indent = 0;
+  private currentSpan: import("@aardworx/wombat.shader-ir").Span | undefined;
+  /** One entry per emitted line; `undefined` for unmapped lines. */
+  readonly lineSpans: (import("@aardworx/wombat.shader-ir").Span | undefined)[] = [];
 
-  line(s: string): void { this.parts.push("    ".repeat(this.indent) + s + "\n"); }
-  blank(): void { this.parts.push("\n"); }
+  line(s: string): void {
+    this.parts.push("    ".repeat(this.indent) + s + "\n");
+    this.lineSpans.push(this.currentSpan);
+  }
+  blank(): void {
+    this.parts.push("\n");
+    this.lineSpans.push(undefined);
+  }
   inc(): void { this.indent++; }
   dec(): void { this.indent = Math.max(0, this.indent - 1); }
+  setSpan(s: import("@aardworx/wombat.shader-ir").Span | undefined): void {
+    this.currentSpan = s;
+  }
   toString(): string { return this.parts.join(""); }
 }
 
@@ -374,6 +394,7 @@ function capitalise(s: string): string {
 // ─────────────────────────────────────────────────────────────────────
 
 function emitStmt(ctx: Ctx, s: Stmt): void {
+  if (s.span) ctx.out.setSpan(s.span);
   switch (s.kind) {
     case "Nop":
       return;
@@ -531,8 +552,16 @@ export function expr(e: Expr): string {
     }
     case "Call":
       return `${e.fn.signature.name}(${e.args.map(expr).join(", ")})`;
-    case "CallIntrinsic":
+    case "CallIntrinsic": {
+      // Atomic ops take a pointer to the storage element as their first
+      // argument: `atomicAdd(&buf[i], 1)`.
+      if (e.op.atomic && e.args.length > 0) {
+        const first = expr(e.args[0]!);
+        const rest = e.args.slice(1).map(expr);
+        return `${e.op.emit.wgsl}(&${first}${rest.length ? ", " + rest.join(", ") : ""})`;
+      }
       return `${e.op.emit.wgsl}(${e.args.map(expr).join(", ")})`;
+    }
     case "Conditional":
       // WGSL has `select(false, true, cond)` — argument order!
       return `select(${expr(e.ifFalse)}, ${expr(e.ifTrue)}, ${expr(e.cond)})`;
@@ -701,16 +730,37 @@ function typeStr(t: Type): string {
       return t.comparison ? "sampler_comparison" : "sampler";
     case "Texture": {
       const arr = t.arrayed ? "_array" : "";
-      const ms = t.multisampled ? "_multisampled" : "";
       const dim = t.target === "1D" ? "1d"
                 : t.target === "2D" ? "2d"
                 : t.target === "3D" ? "3d"
                 : t.target === "Cube" ? "cube"
                 : t.target === "2DArray" ? "2d"
                 : t.target === "CubeArray" ? "cube"
+                : t.target === "2DMS" ? "2d"
+                : t.target === "2DMSArray" ? "2d"
                 : t.target;
+      // Depth/comparison textures: `texture_depth_*` (no element arg).
+      if (t.comparison) {
+        return `texture_depth_${dim}${arr}`;
+      }
+      // Multisampled textures: `texture_multisampled_*<T>` (no _array
+      // form is exposed by WGSL today; 2DMSArray collapses to 2DMS
+      // emit at this layer).
+      if (t.multisampled) {
+        const sampledTy = t.sampled.kind === "Float" ? "f32" : (t.sampled.signed ? "i32" : "u32");
+        return `texture_multisampled_${dim}<${sampledTy}>`;
+      }
       const sampledTy = t.sampled.kind === "Float" ? "f32" : (t.sampled.signed ? "i32" : "u32");
-      return `texture${ms}_${dim}${arr}<${sampledTy}>`;
+      return `texture_${dim}${arr}<${sampledTy}>`;
+    }
+    case "StorageTexture": {
+      const arr = t.arrayed ? "_array" : "";
+      const dim = t.target === "2D" ? "2d"
+                : t.target === "3D" ? "3d"
+                : t.target === "Cube" ? "cube"
+                : t.target === "1D" ? "1d"
+                : t.target;
+      return `texture_storage_${dim}${arr}<${t.format}, ${t.access}>`;
     }
     case "AtomicI32": return "atomic<i32>";
     case "AtomicU32": return "atomic<u32>";

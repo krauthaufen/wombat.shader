@@ -28,6 +28,9 @@ export type {
 export type { LayoutInfo, LayoutTarget, FieldLayout } from "./layout.js";
 export { computeLayout } from "./layout.js";
 
+export { stage, effect, vertex, fragment, compute } from "./stage.js";
+export type { Stage, Effect, HoleGetter, HoleGetters } from "./stage.js";
+
 // Backend-specific subpaths:
 //
 //   import { linkEffect } from "@aardworx/wombat.shader-runtime/webgl2";

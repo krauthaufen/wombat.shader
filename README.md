@@ -183,6 +183,83 @@ original:
 
 Total realistic budget: 3–4 months full-time for a usable v0.1.
 
+## Math types & operators
+
+Shader source can — and should — use the same `V*f` / `M*f` /
+`V*i` / `V*ui` classes as the surrounding CPU code. The shipped
+type re-exports of `@aardworx/wombat.base` give:
+
+- Real runtime classes (`new V3f(1, 2, 3)` works on the CPU; the
+  same call is recognised by the shader frontend and lowered to a
+  `NewVector` IR node).
+- Methods that match GLSL/WGSL semantics: `add` / `sub` / `mul` /
+  `div` / `dot` / `cross` / `length` / `normalize` / `transpose` /
+  `inverse` / `lerp` / `clamp` / `min` / `max` / `lengthSquared` /
+  `distance` / etc.
+- A `__aardworxMathBrand` field that
+  [`boperators`](https://www.npmjs.com/package/boperators)
+  recognises so users can write `+` / `-` / `*` / `/` instead of
+  method calls.
+
+To turn on operator syntax in app + shader code:
+
+```jsonc
+// tsconfig.json
+{
+  "compilerOptions": {
+    "plugins": [
+      { "transform": "@boperators/plugin-tsc", "transformProgram": true },
+      { "name": "@boperators/plugin-ts-language-server" }
+    ]
+  }
+}
+```
+
+```ts
+// vite.config.ts
+import { defineConfig } from "vite";
+import { boperatorsVite } from "@boperators/plugin-vite";
+import { wombatShader } from "@aardworx/wombat.shader-vite";
+
+export default defineConfig({
+  plugins: [
+    boperatorsVite(),  // first — rewrites `a + b` to `a.add(b)`
+    wombatShader(),    // second — sees `.add()` and translates to IR
+  ],
+});
+```
+
+Add the dev dependencies:
+
+```
+npm i -D boperators @boperators/plugin-tsc \
+        @boperators/plugin-ts-language-server \
+        @boperators/plugin-vite
+```
+
+After this, shader bodies look like:
+
+```ts
+import { V3f, M44f } from "@aardworx/wombat.shader-types";
+
+declare const u: { mvp: M44f };
+
+const fx = effect(
+  vertex((v: { a_position: V3f }) => ({
+    gl_Position: u.mvp * new V4f(v.a_position.x, v.a_position.y, v.a_position.z, 1),
+  })),
+  fragment((input: { v_color: V3f }) => ({
+    outColor: new V4f(
+      (input.v_color * 0.5).x, input.v_color.y, input.v_color.z, 1,
+    ),
+  })),
+);
+```
+
+The IDE provides autocomplete on `V3f` methods, the LSP type-checks
+operator overloads, and the shader plugin emits the right WGSL/GLSL
+either way (with or without `boperators`).
+
 ## License
 
 MIT, mirroring the rest of the stack.

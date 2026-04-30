@@ -21,14 +21,17 @@ import {
   cse,
   dce,
   foldConstants,
+  inferStorageAccess,
   inlinePass,
   legaliseTypes,
   liftReturns,
   pruneCrossStage,
   reduceUniforms,
+  reverseMatrixOps,
 } from "@aardworx/wombat.shader-passes";
 import { emitGlsl, type EmitResult as GlslEmitResult } from "@aardworx/wombat.shader-glsl";
 import { emitWgsl, type EmitResult as WgslEmitResult } from "@aardworx/wombat.shader-wgsl";
+import { buildSourceMap } from "@aardworx/wombat.shader-ir";
 import { parseShader, type EntryRequest } from "@aardworx/wombat.shader-frontend";
 import { buildInterface, type ProgramInterface, type StageSourceInfo } from "./interface.js";
 
@@ -40,6 +43,13 @@ export interface CompiledStage {
   readonly source: string;
   readonly bindings: GlslEmitResult["bindings"] | WgslEmitResult["bindings"];
   readonly meta: GlslEmitResult["meta"] | WgslEmitResult["meta"];
+  /**
+   * v3 source map — one entry per emitted shader source line,
+   * pointing back at the originating TypeScript source position.
+   * `null` when no spans were available (hand-built IR Modules
+   * with no AST origin).
+   */
+  readonly sourceMap: import("@aardworx/wombat.shader-ir").SourceMap | null;
 }
 
 export interface CompiledEffect {
@@ -52,6 +62,13 @@ export interface CompiledEffect {
    * Modeled after FShade's GLSLProgramInterface.
    */
   readonly interface: ProgramInterface;
+  /**
+   * Aval-bound uniforms: name → opaque getter. The rendering backend
+   * subscribes each getter (typically returning an `aval<T>` from
+   * `@aardworx/adaptive`) to drive the corresponding uniform binding
+   * at draw time. Empty when no aval-typed captures were present.
+   */
+  readonly avalBindings: Readonly<Record<string, () => unknown>>;
 }
 
 export interface CompileOptions {
@@ -65,6 +82,20 @@ export interface CompileOptions {
    * references by name.
    */
   readonly extraValues?: readonly ValueDef[];
+  /**
+   * Skip the matrix-reversal pass that converts row-major
+   * (wombat.base / Aardvark) matrix operations into the column-
+   * major form GPUs expect. Default: `false` (reversal applied).
+   *
+   * Set to `true` if your runtime code already pre-transposes
+   * matrices before upload, or you're using
+   * `layout(row_major)` UBO qualifiers in GLSL — in those cases
+   * the shader expects column-major math and reversal would be
+   * wrong.
+   */
+  readonly skipMatrixReversal?: boolean;
+  /** Filename associated with the source (for source maps). */
+  readonly file?: string;
 }
 
 export function compileShaderSource(
@@ -85,7 +116,10 @@ export function compileShaderSource(
       externalTypes.set(v.name, v.varType);
     }
   }
-  const parsed = parseShader({ source, entries, externalTypes });
+  const parsed = parseShader({
+    source, entries, externalTypes,
+    ...(options.file !== undefined ? { file: options.file } : {}),
+  });
   const merged: Module = options.extraValues
     ? { ...parsed, values: [...options.extraValues, ...parsed.values] }
     : parsed;
@@ -107,6 +141,15 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
     m = pruneCrossStage(m);
     m = reduceUniforms(m);
   }
+  // Storage-buffer inference must run after the optimiser passes (which
+  // may have eliminated dead writes) and before legaliseTypes (the WGSL
+  // backend needs the right element type for binding declarations).
+  m = inferStorageAccess(m);
+  // Row-major → column-major reversal for matrix ops. Runs late so
+  // composeStages / inlinePass / etc. operate on the canonical
+  // row-major form; the reversal is a final adjustment for the GPU's
+  // memory-layout convention.
+  if (!options.skipMatrixReversal) m = reverseMatrixOps(m);
   m = legaliseTypes(m, options.target);
   return emitAll(m, options.target);
 }
@@ -114,18 +157,35 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
 function emitAll(module: Module, target: Target): CompiledEffect {
   const stages: CompiledStage[] = [];
   const stageInfos: StageSourceInfo[] = [];
+  // Per-source-file content lookup. The frontend records `Span.file`
+  // per IR node; the source-map builder needs the file's text to
+  // turn byte offsets into (line, col) positions.
+  const fileContents = collectSourceContents(module);
+
   for (const v of module.values) {
     if (v.kind !== "Entry") continue;
     if (target === "glsl") {
       const r = emitGlsl(module, v.entry.name);
-      stages.push({ stage: v.entry.stage, entryName: v.entry.name, source: r.source, bindings: r.bindings, meta: r.meta });
+      const sourceMap = anyMapped(r.lineSpans)
+        ? buildSourceMap({ lineSpans: r.lineSpans, fileContents })
+        : null;
+      stages.push({
+        stage: v.entry.stage, entryName: v.entry.name, source: r.source,
+        bindings: r.bindings, meta: r.meta, sourceMap,
+      });
       stageInfos.push({
         stage: v.entry.stage, entryName: v.entry.name, source: r.source,
         ...(r.meta.workgroupSize ? { workgroupSize: r.meta.workgroupSize } : {}),
       });
     } else {
       const r = emitWgsl(module, v.entry.name);
-      stages.push({ stage: v.entry.stage, entryName: v.entry.name, source: r.source, bindings: r.bindings, meta: r.meta });
+      const sourceMap = anyMapped(r.lineSpans)
+        ? buildSourceMap({ lineSpans: r.lineSpans, fileContents })
+        : null;
+      stages.push({
+        stage: v.entry.stage, entryName: v.entry.name, source: r.source,
+        bindings: r.bindings, meta: r.meta, sourceMap,
+      });
       stageInfos.push({
         stage: v.entry.stage, entryName: v.entry.name, source: r.source,
         ...(r.meta.workgroupSize ? { workgroupSize: r.meta.workgroupSize } : {}),
@@ -133,5 +193,22 @@ function emitAll(module: Module, target: Target): CompiledEffect {
     }
   }
   const iface = buildInterface({ target, module, stages: stageInfos });
-  return { target, stages, interface: iface };
+  return { target, stages, interface: iface, avalBindings: {} };
+}
+
+function anyMapped(spans: ReadonlyArray<unknown>): boolean {
+  for (const s of spans) if (s) return true;
+  return false;
+}
+
+/**
+ * Walk the module's IR for any `span` referencing a source file
+ * whose contents we can recover. We don't currently embed sources
+ * in the module — the file path is just an identifier from the
+ * frontend's `parseShader` `file` option. For now we return an
+ * empty map; callers that want `sourcesContent` populated can
+ * pass file → contents through a future `compile` option.
+ */
+function collectSourceContents(_module: Module): Map<string, string> {
+  return new Map();
 }

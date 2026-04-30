@@ -27,10 +27,15 @@ const TYPE_TABLE: Record<string, Type> = {
   u32: Tu32,
   f32: Tf32,
 
-  // wombat.shader-types names
+  // wombat.base / wombat.shader-types names
   V2b: Tvec(Tbool, 2), V3b: Tvec(Tbool, 3), V4b: Tvec(Tbool, 4),
   V2i: Tvec(Ti32, 2),  V3i: Tvec(Ti32, 3),  V4i: Tvec(Ti32, 4),
+  // wombat.base uses `Vxui`; older shipped shims used `Vxu`. Both
+  // resolve to the same IR type — we keep both names for
+  // back-compat. New code should prefer `Vxui` (the wombat.base
+  // canonical form).
   V2u: Tvec(Tu32, 2),  V3u: Tvec(Tu32, 3),  V4u: Tvec(Tu32, 4),
+  V2ui: Tvec(Tu32, 2), V3ui: Tvec(Tu32, 3), V4ui: Tvec(Tu32, 4),
   V2f: Tvec(Tf32, 2),  V3f: Tvec(Tf32, 3),  V4f: Tvec(Tf32, 4),
 
   M22f: Tmat(Tf32, 2, 2), M33f: Tmat(Tf32, 3, 3), M44f: Tmat(Tf32, 4, 4),
@@ -42,9 +47,13 @@ const TYPE_TABLE: Record<string, Type> = {
   Sampler3D: { kind: "Sampler", target: "3D", sampled: { kind: "Float" }, comparison: false },
   SamplerCube: { kind: "Sampler", target: "Cube", sampled: { kind: "Float" }, comparison: false },
   Sampler2DArray: { kind: "Sampler", target: "2DArray", sampled: { kind: "Float" }, comparison: false },
+  SamplerCubeArray: { kind: "Sampler", target: "CubeArray", sampled: { kind: "Float" }, comparison: false },
   ISampler2D: { kind: "Sampler", target: "2D", sampled: { kind: "Int", signed: true }, comparison: false },
   USampler2D: { kind: "Sampler", target: "2D", sampled: { kind: "Int", signed: false }, comparison: false },
   Sampler2DShadow: { kind: "Sampler", target: "2D", sampled: { kind: "Float" }, comparison: true },
+  Sampler2DMS: { kind: "Sampler", target: "2DMS", sampled: { kind: "Float" }, comparison: false },
+  ISampler2DMS: { kind: "Sampler", target: "2DMS", sampled: { kind: "Int", signed: true }, comparison: false },
+  USampler2DMS: { kind: "Sampler", target: "2DMS", sampled: { kind: "Int", signed: false }, comparison: false },
 };
 
 /** Resolve a textual TS type name to an IR Type. Throws on unknown names. */

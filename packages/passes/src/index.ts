@@ -12,6 +12,10 @@ export { legaliseTypes } from "./legaliseTypes.js";
 export type { Target } from "./legaliseTypes.js";
 export { liftReturns } from "./liftReturns.js";
 export type { LiftReturnsOptions } from "./liftReturns.js";
+export { inferStorageAccess } from "./inferStorageAccess.js";
+export { resolveHoles } from "./resolveHoles.js";
+export type { HoleValue, Holes } from "./resolveHoles.js";
+export { reverseMatrixOps } from "./reverseMatrixOps.js";
 
 export {
   isPure,

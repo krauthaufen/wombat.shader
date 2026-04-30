@@ -20,8 +20,10 @@
 //    frontend reads to figure out which `@builtin(...)` decorations
 //    to emit.
 
+export * from "./scalars.js";
 export * from "./vectors.js";
 export * from "./matrices.js";
 export * from "./samplers.js";
+export * from "./storage.js";
 export * from "./intrinsics.js";
 export * from "./builtins.js";

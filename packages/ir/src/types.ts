@@ -19,11 +19,34 @@ export interface Span {
 // ─────────────────────────────────────────────────────────────────────
 
 export type SamplerTarget =
-  | "1D" | "2D" | "3D" | "Cube" | "2DArray" | "CubeArray";
+  | "1D" | "2D" | "3D" | "Cube" | "2DArray" | "CubeArray"
+  | "2DMS" | "2DMSArray";
 
 export type SampledType =
   | { readonly kind: "Float" }
   | { readonly kind: "Int"; readonly signed: boolean };
+
+/**
+ * Storage-texture access mode. `read_write` is the most permissive
+ * but a backend may reject it on platforms without the relevant
+ * extension (WebGPU forbids it on most formats today; some Tier-2
+ * extensions allow it).
+ */
+export type StorageAccess = "read" | "write" | "read_write";
+
+/**
+ * WGSL storage-texture formats. Subset chosen to cover the
+ * everyday compute / image-processing cases; expand as needed.
+ * Mirrors the `texture_storage_*<FORMAT, ACCESS>` second-tier
+ * formats list from the WGSL spec.
+ */
+export type StorageTextureFormat =
+  | "rgba8unorm" | "rgba8snorm" | "rgba8uint" | "rgba8sint"
+  | "rgba16uint" | "rgba16sint" | "rgba16float"
+  | "r32uint" | "r32sint" | "r32float"
+  | "rg32uint" | "rg32sint" | "rg32float"
+  | "rgba32uint" | "rgba32sint" | "rgba32float"
+  | "bgra8unorm";
 
 export interface StructField {
   readonly type: Type;
@@ -51,6 +74,19 @@ export type Type =
       readonly sampled: SampledType;
       readonly arrayed: boolean;
       readonly multisampled: boolean;
+      /**
+       * `true` for depth/shadow textures. WGSL emits as
+       * `texture_depth_*` (no generic element type); GLSL ES 3.00
+       * uses `sampler2DShadow` etc. on the combined-sampler side.
+       */
+      readonly comparison?: boolean;
+    }
+  | {
+      readonly kind: "StorageTexture";
+      readonly target: SamplerTarget;
+      readonly format: StorageTextureFormat;
+      readonly access: StorageAccess;
+      readonly arrayed: boolean;
     }
   | { readonly kind: "AtomicI32" }
   | { readonly kind: "AtomicU32" }
@@ -113,6 +149,15 @@ export interface IntrinsicRef {
   readonly returnTypeOf: (args: readonly Type[]) => Type;
   readonly pure: boolean;
   readonly samplerBinding?: boolean;
+  /**
+   * Atomic operation on a storage location (`atomicAdd`, `atomicLoad`, …).
+   * The first argument is a storage-buffer element reference; WGSL emits
+   * it as `&expr`, GLSL has no surface for it. Drives the storage-access
+   * inference pass: a buffer touched by an atomic intrinsic gets its
+   * element type promoted to `AtomicI32`/`AtomicU32`, and any access
+   * implies `read_write`.
+   */
+  readonly atomic?: boolean;
   readonly emit: { readonly glsl: string; readonly wgsl: string };
 }
 
@@ -121,7 +166,7 @@ export interface IntrinsicRef {
 // ─────────────────────────────────────────────────────────────────────
 
 export type VecComp = "x" | "y" | "z" | "w";
-export type InputScope = "Input" | "Output" | "Uniform" | "Builtin";
+export type InputScope = "Input" | "Output" | "Uniform" | "Builtin" | "Closure";
 
 type _ExprBase = { readonly type: Type; readonly span?: Span };
 
@@ -229,7 +274,14 @@ export interface SwitchCase {
   readonly body: Stmt;
 }
 
-export type Stmt =
+/**
+ * Optional source span on every Stmt — populated by the frontend
+ * from TS AST positions, threaded through the emitters' Writers,
+ * and used to build per-line v3 source maps in CompiledStage.
+ */
+type _StmtBase = { readonly span?: Span };
+
+export type Stmt = _StmtBase & (
   | { readonly kind: "Nop" }
   | { readonly kind: "Expression"; readonly value: Expr }
   | { readonly kind: "Declare"; readonly var: Var; readonly init?: RExpr }
@@ -265,7 +317,8 @@ export type Stmt =
       readonly default?: Stmt;
     }
   | { readonly kind: "Discard" }
-  | { readonly kind: "Barrier"; readonly scope: BarrierScope };
+  | { readonly kind: "Barrier"; readonly scope: BarrierScope }
+);
 
 // ─────────────────────────────────────────────────────────────────────
 // Definitions and module

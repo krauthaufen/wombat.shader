@@ -73,33 +73,57 @@ function liftEntry(entry: EntryDef): EntryDef {
 
 function liftStmt(s: Stmt, entry: EntryDef): Stmt {
   if (s.kind !== "ReturnValue") return s;
-  const lifted = tryLiftReturn(s.value, entry);
+  const lifted = tryLiftReturn(s.value, entry, s.span);
   if (!lifted) return s;
   return lifted;
 }
 
-function tryLiftReturn(value: Expr, entry: EntryDef): Stmt | undefined {
-  // Pattern: ReturnValue carrying a synthetic "_record" node — see
+function tryLiftReturn(value: Expr, entry: EntryDef, span: import("@aardworx/wombat.shader-ir").Span | undefined): Stmt | undefined {
+  // Pattern A: ReturnValue carrying a synthetic "_record" node — see
   // frontend `ObjectLiteralExpression` translation. We tag the carrier
   // by storing the field map on the Expr's `tag` (the IR's
   // `Intrinsic.tag` is unused for non-Intrinsic types; we co-opt the
   // hidden `_record` property the frontend sets).
   const fields = (value as { _record?: ReadonlyMap<string, Expr> })._record;
-  if (!fields) return undefined;
-  const writes: Stmt[] = [];
-  for (const [name, expr] of fields) {
-    const declaredOutput = entry.outputs.find((o) => o.name === name);
-    if (!declaredOutput) continue; // unknown output → leave as-is in body
-    writes.push({
-      kind: "WriteOutput",
-      name,
-      value: { kind: "Expr", value: expr },
-    });
+  if (fields !== undefined) {
+    const writes: Stmt[] = [];
+    for (const [name, expr] of fields) {
+      const declaredOutput = entry.outputs.find((o) => o.name === name);
+      if (!declaredOutput) continue; // unknown output → leave as-is in body
+      writes.push({
+        kind: "WriteOutput",
+        name,
+        value: { kind: "Expr", value: expr, ...(span !== undefined ? { span } : {}) },
+        ...(span !== undefined ? { span } : {}),
+      });
+    }
+    if (writes.length === 0) return undefined;
+    return { kind: "Sequential", body: writes, ...(span !== undefined ? { span } : {}) };
   }
-  if (writes.length === 0) return undefined;
-  // No trailing `Return`: the WGSL emitter auto-appends `return out;`
-  // for stages with synthetic output structs, and GLSL's `void main()`
-  // doesn't need an explicit final return. Adding one here produces
-  // dead code after the auto-return in WGSL.
-  return { kind: "Sequential", body: writes };
+  // Pattern B: bare-value return (`return new V4f(...)`).
+  //
+  //   - Vertex with one declared output: that's the @builtin(position)
+  //     slot. Bare V4f → write position.
+  //   - Fragment with one declared output: that's the first colour
+  //     attachment. Bare V4f → write colour.
+  //   - Compute or anything with multiple outputs: ambiguous, leave
+  //     the return as-is and let the WGSL parser surface the error.
+  //
+  // The single-output rule covers the canonical "shorthand return"
+  // form for both vertex and fragment without trying to infer
+  // builtin-vs-not, which the entry decoration already encodes.
+  if (entry.outputs.length === 1) {
+    const target = entry.outputs[0]!;
+    return {
+      kind: "Sequential",
+      body: [{
+        kind: "WriteOutput",
+        name: target.name,
+        value: { kind: "Expr", value, ...(span !== undefined ? { span } : {}) },
+        ...(span !== undefined ? { span } : {}),
+      }],
+      ...(span !== undefined ? { span } : {}),
+    };
+  }
+  return undefined;
 }

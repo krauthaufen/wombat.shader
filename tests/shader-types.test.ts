@@ -16,7 +16,7 @@ describe("shader-types — type-only smoke", () => {
     function frag(uv: V2f, tex: Sampler2D, time: number): V4f {
       const base = texture(tex, uv);
       const wave = sin(time);
-      const tinted = mix(base, vec4(wave, wave, wave, 1), 0.5);
+      const tinted = mix(base, new V4f(wave, wave, wave, 1), 0.5);
       return tinted;
     }
     // The `frag` function above must type-check. We can't call it
@@ -25,10 +25,10 @@ describe("shader-types — type-only smoke", () => {
     expect(typeof frag).toBe("function");
   });
 
-  it("intrinsics generic over vector types", () => {
+  it("vector methods replace the old `normalize` / `dot` free functions", () => {
     function ndc(p: V3f): V3f {
-      const n = normalize(p);
-      const d = dot(n, vec3(0, 0, 1));
+      const n = p.normalize();
+      const d = n.dot(new V3f(0, 0, 1));
       return n.mul(d);
     }
     expect(typeof ndc).toBe("function");

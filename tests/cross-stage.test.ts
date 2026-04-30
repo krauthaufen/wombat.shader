@@ -324,7 +324,7 @@ describe("integration: composeStages → pruneCrossStage → reduceUniforms", ()
         value: {
           kind: "Expr",
           value: {
-            // tmp = vec3(u_dead, u_dead, u_dead) — uses u_dead only.
+            // tmp = new V3f(u_dead, u_dead, u_dead) — uses u_dead only.
             kind: "NewVector",
             components: [readU("u_dead", Tf32), readU("u_dead", Tf32), readU("u_dead", Tf32)],
             type: Tvec3f,

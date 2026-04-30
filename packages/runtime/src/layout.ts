@@ -98,6 +98,7 @@ function std140(t: Type): LayoutInfo {
       return std140Struct(t.fields);
     case "Sampler":
     case "Texture":
+    case "StorageTexture":
     case "AtomicI32":
     case "AtomicU32":
     case "Intrinsic":
@@ -171,6 +172,7 @@ function wgsl(t: Type, isUniform: boolean): LayoutInfo {
       return wgslStruct(t.fields, isUniform);
     case "Sampler":
     case "Texture":
+    case "StorageTexture":
     case "AtomicI32":
     case "AtomicU32":
     case "Intrinsic":

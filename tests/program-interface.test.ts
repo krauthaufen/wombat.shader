@@ -147,12 +147,12 @@ describe("ProgramInterface — end-to-end from TS source", () => {
     const src = `
       function vsMain(input: { a_position: V2f; a_color: V3f }): { gl_Position: V4f; v_color: V3f } {
         return {
-          gl_Position: vec4(input.a_position.x, input.a_position.y, 0.0, 1.0),
+          gl_Position: new V4f(input.a_position.x, input.a_position.y, 0.0, 1.0),
           v_color: input.a_color,
         };
       }
       function fsMain(input: { v_color: V3f }): { outColor: V4f } {
-        return { outColor: vec4(input.v_color.x, input.v_color.y, input.v_color.z, 1.0) };
+        return { outColor: new V4f(input.v_color.x, input.v_color.y, input.v_color.z, 1.0) };
       }
     `;
     const r = compileShaderSource(src, [

@@ -14,5 +14,8 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "src"]
+  "files": ["dist", "src"],
+  "dependencies": {
+    "@aardworx/wombat.base": "^0.3.0"
+  }
 }

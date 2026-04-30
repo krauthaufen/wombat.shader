@@ -32,6 +32,11 @@ import * as fs from "node:fs/promises";
 import { compileShaderSource, type CompiledEffect, type CompileOptions } from "@aardworx/wombat.shader-runtime";
 import type { EntryRequest } from "@aardworx/wombat.shader-frontend";
 import type { ValueDef } from "@aardworx/wombat.shader-ir";
+import { transformInlineShaders } from "./inline.js";
+import { TypeResolver } from "./typeResolver.js";
+
+export { transformInlineShaders } from "./inline.js";
+export { TypeResolver } from "./typeResolver.js";
 
 export interface ShaderModuleConfig extends CompileOptions {
   readonly source: string;
@@ -44,13 +49,23 @@ export interface PluginOptions {
   readonly include?: RegExp;
   /** Force a different match pattern; overrides `include`. */
   readonly match?: (id: string) => boolean;
+  /**
+   * Project root for the inline-shader type resolver. Defaults to
+   * `process.cwd()`. The resolver discovers `tsconfig.json` from this
+   * directory upwards, builds a `ts.LanguageService`, and uses it to
+   * resolve closure-capture types and ambient `declare const u: { … }`
+   * uniform declarations across the entire project.
+   */
+  readonly rootDir?: string;
+  /** Explicit tsconfig path; auto-discovered from `rootDir` otherwise. */
+  readonly tsconfigPath?: string;
 }
 
 interface VitePlugin {
   name: string;
   enforce?: "pre" | "post";
   load?(id: string): Promise<{ code: string } | null> | { code: string } | null;
-  transform?(code: string, id: string): Promise<{ code: string; map?: null }> | { code: string; map?: null } | null;
+  transform?(code: string, id: string): Promise<{ code: string; map?: null } | null> | { code: string; map?: null } | null;
   handleHotUpdate?(ctx: { file: string; server: { ws: { send(payload: { type: string; path: string }): void } } }): void;
 }
 
@@ -58,6 +73,17 @@ const DEFAULT_INCLUDE = /\.shader\.(?:ts|tsx|mjs|js)$/;
 
 export function wombatShader(options: PluginOptions = {}): VitePlugin {
   const matches = options.match ?? ((id: string) => (options.include ?? DEFAULT_INCLUDE).test(id));
+
+  let resolver: TypeResolver | undefined;
+  function getResolver(): TypeResolver {
+    if (!resolver) {
+      resolver = new TypeResolver({
+        rootDir: options.rootDir ?? process.cwd(),
+        ...(options.tsconfigPath ? { tsconfigPath: options.tsconfigPath } : {}),
+      });
+    }
+    return resolver;
+  }
 
   return {
     name: "wombat-shader",
@@ -90,6 +116,20 @@ export function wombatShader(options: PluginOptions = {}): VitePlugin {
               `const effect = ${json};\n` +
               `export default effect;\n`,
       };
+    },
+
+    transform(code: string, id: string) {
+      const cleanId = id.split("?")[0]!;
+      // The `load` hook above handles `*.shader.ts`. Skip those here
+      // so we don't process them twice.
+      if (matches(cleanId)) return null;
+      // Limit inline-shader scanning to TS / TSX user code.
+      if (!/\.(ts|tsx)$/.test(cleanId)) return null;
+      // Skip node_modules to avoid scanning third-party deps.
+      if (/[\\/]node_modules[\\/]/.test(cleanId)) return null;
+      const result = transformInlineShaders(code, cleanId, getResolver());
+      if (!result) return null;
+      return { code: result.code, map: result.map as null };
     },
 
     handleHotUpdate(ctx) {

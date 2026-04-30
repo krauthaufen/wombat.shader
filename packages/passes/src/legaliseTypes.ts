@@ -25,6 +25,7 @@ import type {
   FunctionSignature,
   IntrinsicRef,
   Module,
+  SamplerTarget,
   Stmt,
   Type,
   ValueDef,
@@ -103,24 +104,54 @@ function splitWgslSamplers(module: Module): Module {
   }
   if (combined.size === 0) return module;
 
-  // Inject paired Texture ValueDefs.
+  // Inject paired Texture ValueDefs. Multisample samplers don't pair —
+  // WGSL `texture_multisampled_*<T>` is sampled with `textureLoad`,
+  // not `textureSample`, and there's no companion `sampler` binding.
+  // The original Sampler binding becomes the multisampled Texture
+  // directly (Sampler ValueDef.type swapped to Texture).
   const newValues: ValueDef[] = [];
   for (const v of module.values) {
-    newValues.push(v);
     if (v.kind === "Sampler" && v.type.kind === "Sampler" && combined.has(v.name)) {
+      const arrayed = v.type.target === "2DArray" || v.type.target === "CubeArray" || v.type.target === "2DMSArray";
+      const multisampled = v.type.target === "2DMS" || v.type.target === "2DMSArray";
+      // Normalise the texture target — the IR keeps an explicit
+      // arrayed/multisampled flag, so collapse "2DArray"/"2DMS" back
+      // to the base dimensionality.
+      const baseTarget: SamplerTarget = (
+        v.type.target === "2DArray" || v.type.target === "2DMS" || v.type.target === "2DMSArray" ? "2D" :
+        v.type.target === "CubeArray" ? "Cube" :
+        v.type.target
+      );
       const textureType: Type = {
         kind: "Texture",
-        target: v.type.target,
+        target: baseTarget,
         sampled: v.type.sampled,
-        arrayed: false,
-        multisampled: false,
+        arrayed,
+        multisampled,
+        ...(v.type.comparison ? { comparison: true } : {}),
       };
-      newValues.push({
-        kind: "Sampler",
-        binding: { group: v.binding.group, slot: v.binding.slot + 1 },
-        name: `${v.name}_view`,
-        type: textureType,
-      });
+      if (multisampled) {
+        // No companion sampler — replace the binding's type in-place
+        // with the multisampled Texture.
+        newValues.push({
+          kind: "Sampler",
+          binding: v.binding,
+          name: v.name,
+          type: textureType,
+        });
+      } else {
+        // Keep the original Sampler (combined sampler/sampler_comparison)
+        // and add a sibling Texture binding at slot+1.
+        newValues.push(v);
+        newValues.push({
+          kind: "Sampler",
+          binding: { group: v.binding.group, slot: v.binding.slot + 1 },
+          name: `${v.name}_view`,
+          type: textureType,
+        });
+      }
+    } else {
+      newValues.push(v);
     }
   }
 
@@ -132,15 +163,35 @@ function splitWgslSamplers(module: Module): Module {
     // Matches a Var or ReadInput referencing the combined name.
     const samplerName = nameOfSamplerArg(first);
     if (!samplerName || !combined.has(samplerName)) return e;
+    const samplerType = first.type as Extract<Type, { kind: "Sampler" }>;
+    const arrayed = samplerType.target === "2DArray" || samplerType.target === "CubeArray" || samplerType.target === "2DMSArray";
+    const multisampled = samplerType.target === "2DMS" || samplerType.target === "2DMSArray";
+    const baseTarget: SamplerTarget = (
+      samplerType.target === "2DArray" || samplerType.target === "2DMS" || samplerType.target === "2DMSArray" ? "2D" :
+      samplerType.target === "CubeArray" ? "Cube" :
+      samplerType.target
+    );
+    const textureType: Type = {
+      kind: "Texture",
+      target: baseTarget,
+      sampled: samplerType.sampled,
+      arrayed,
+      multisampled,
+      ...(samplerType.comparison ? { comparison: true } : {}),
+    };
+    if (multisampled) {
+      // For MS textures the sampler argument disappears — `textureLoad`
+      // takes (texture, coord, sample). Rewrite the call to use the
+      // (now Texture-typed) binding name directly, drop the sampler.
+      const textureExpr: Expr = {
+        kind: "ReadInput", scope: "Uniform", name: samplerName,
+        type: textureType,
+      };
+      return { ...e, args: [textureExpr, ...e.args.slice(1)] };
+    }
     const textureExpr: Expr = {
       kind: "ReadInput", scope: "Uniform", name: `${samplerName}_view`,
-      type: {
-        kind: "Texture",
-        target: (first.type as Extract<Type, { kind: "Sampler" }>).target,
-        sampled: (first.type as Extract<Type, { kind: "Sampler" }>).sampled,
-        arrayed: false,
-        multisampled: false,
-      },
+      type: textureType,
     };
     // textureSample(view, sampler, ...rest)
     return { ...e, args: [textureExpr, first, ...e.args.slice(1)] };
