@@ -1,4 +1,4 @@
-# tshade
+# wombat.shader
 
 A TypeScript port of [FShade](https://fshade.org) — write shaders as
 TypeScript functions, get GLSL/WGSL out, with the same IR-level
@@ -15,7 +15,7 @@ This is the third leg of a three-part journey to bring
 2. [`@aardworx/adaptive-ui`](https://www.npmjs.com/package/@aardworx/adaptive-ui)
    — direct-DOM JSX runtime where adaptive values, lists, and maps sit
    in the same JSX positions as plain values. ✓
-3. **`@aardworx/tshade`** — what this repo will become. Lets adaptive
+3. **`@aardworx/wombat.shader`** — what this repo will become. Lets adaptive
    collections drive WebGL2 / WebGPU pipelines through real shader
    composition with a working optimiser.
 
@@ -54,13 +54,13 @@ collapse to three:
 │  TS AST                 │   tsc parses the file as normal
 └────────────┬────────────┘
              │
-             │  tshade-frontend uses TypeScript Compiler API:
+             │  @aardworx/wombat.shader-frontend uses TypeScript Compiler API:
              │   walks the arrow-function body, type-checks operands
              │   against shipped .d.ts (V2/V3/V4/M2/M3/M4/sampler*),
              │   emits IR
              ▼
 ┌─────────────────────────┐       ┌──────────────────────────────┐
-│  tshade IR              │ ◄──►  │  tshade-passes               │
+│  wombat.shader IR              │ ◄──►  │  @aardworx/wombat.shader-passes               │
 │  (Type, Expr, LExpr,    │       │   inline / fold / CSE / DCE  │
 │   Stmt, Module — see    │       │   compose / cross-stage prune│
 │   docs/IR.md)           │       │   uniform-reduce             │
@@ -69,14 +69,14 @@ collapse to three:
              │  emit
              ▼
    ┌─────────────────┐    ┌─────────────────┐
-   │  tshade-glsl    │    │  tshade-wgsl    │
+   │  @aardworx/wombat.shader-glsl    │    │  @aardworx/wombat.shader-wgsl    │
    │  (GLSL ES 3.00) │    │  (WGSL)         │
    └────────┬────────┘    └────────┬────────┘
             │                      │
             ▼                      ▼
       WebGL2 program        WebGPU pipeline
             │                      │
-            └──── tshade-runtime ──┘
+            └──── @aardworx/wombat.shader-runtime ──┘
                   • Effect / ComputeShader / sampler scope
                   • aval-driven uniforms, alist-driven VBOs
                   • UIScheduler integration with adaptive-ui
@@ -87,25 +87,22 @@ emitters consume it. Everything else is plumbing.
 
 ## Package layout
 
+Phase 0 in place; later phases scaffolded but not yet present.
+
 ```
-tshade/
+wombat.shader/                   (npm workspaces; tsc project references)
 ├─ packages/
-│  ├─ tshade-ir/          IR types (Type/Expr/LExpr/RExpr/Stmt/Module)
-│  ├─ tshade-passes/      Optimiser passes
-│  ├─ tshade-frontend/    TS Compiler API → IR
-│  ├─ tshade-glsl/        IR → GLSL ES 3.00
-│  ├─ tshade-wgsl/        IR → WGSL
-│  ├─ tshade-types/       Shipped .d.ts: V2/V3/V4/M2-4, samplers, intrinsics
-│  ├─ tshade-runtime/     Effect / ComputeShader / dispatch / binding
-│  ├─ tshade-vite/        Vite plugin
-│  └─ tshade-swc/         SWC plugin
-└─ examples/
-   ├─ hello-triangle/
-   ├─ instanced-cubes/
-   └─ compute-particles/
+│  ├─ ir/         @aardworx/wombat.shader-ir       IR types + visitors + JSON
+│  ├─ glsl/       @aardworx/wombat.shader-glsl     IR → GLSL ES 3.00
+│  └─ wgsl/       @aardworx/wombat.shader-wgsl     IR → WGSL
+└─ tests/         vitest e2e for both emitters
+
+(planned, not yet present: packages/passes, packages/frontend,
+packages/types, packages/runtime, packages/vite, packages/swc;
+examples/hello-triangle, instanced-cubes, compute-particles.)
 ```
 
-`tshade-ir` and `tshade-passes` are pure — no DOM, no toolchain.
+`@aardworx/wombat.shader-ir` and `@aardworx/wombat.shader-passes` are pure — no DOM, no toolchain.
 Everything is unit-testable from Node. Frontend is the only piece
 that imports `typescript`. Emitters take IR in and produce strings;
 they have no platform dependencies either.
@@ -124,7 +121,7 @@ original:
 - **No `CColor` distinct from `CVector`** — a colour is just a
   `Vector(Float, n)` with a semantic decoration on the parameter.
 - **Aardvark naming conventions for shipped types.** The internal
-  IR stays structural (`Vector(Float, 2)`), but `tshade-types` ships
+  IR stays structural (`Vector(Float, 2)`), but `@aardworx/wombat.shader-types` ships
   `V2i`/`V3i`/`V4i`, `V2u`/`V3u`/`V4u`, `V2f`/`V3f`/`V4f`,
   `V2b`/`V3b`/`V4b`, and the rectangular matrices `M22f`/`M33f`/
   `M44f`/`M23f`/`M24f`/`M32f`/`M34f`/`M42f`/`M43f`. These are what
@@ -147,20 +144,20 @@ original:
 ## Roadmap
 
 - **Phase 0 — IR and passes (~6 weeks)**
-  - [ ] `tshade-ir`: every node type, type checker, pretty-printer
+  - [ ] `@aardworx/wombat.shader-ir`: every node type, type checker, pretty-printer
         for IR-level debug output, JSON (de)serialisation
-  - [ ] `tshade-passes`: DCE, constant folding, inlining, CSE, the
+  - [ ] `@aardworx/wombat.shader-passes`: DCE, constant folding, inlining, CSE, the
         cross-stage pruning pass — all driven by hand-written IR
         programs in tests
 - **Phase 1 — emitters and runtime (~3 weeks)**
-  - [ ] `tshade-glsl`: round-trip the test IR programs to GLSL ES
+  - [ ] `@aardworx/wombat.shader-glsl`: round-trip the test IR programs to GLSL ES
         3.00, link in WebGL2
-  - [ ] `tshade-wgsl`: same for WGSL
-  - [ ] `tshade-runtime`: `Effect`, `ComputeShader`, samplers,
+  - [ ] `@aardworx/wombat.shader-wgsl`: same for WGSL
+  - [ ] `@aardworx/wombat.shader-runtime`: `Effect`, `ComputeShader`, samplers,
         adaptive uniform binding, alist-driven VBO
 - **Phase 2 — frontend (~4 weeks)**
-  - [ ] `tshade-types`: V2/V3/V4/M2-4/sampler\* declarations
-  - [ ] `tshade-frontend`: TS arrow-function body → IR via the
+  - [ ] `@aardworx/wombat.shader-types`: V2/V3/V4/M2-4/sampler\* declarations
+  - [ ] `@aardworx/wombat.shader-frontend`: TS arrow-function body → IR via the
         TypeScript compiler API. Operators (`+`/`-`/`*`/`/`/`%`/
         comparisons) and swizzle property access translated; `if`,
         `for`, `while`, ternaries; calls to other shader functions
@@ -168,10 +165,10 @@ original:
   - [ ] Source-map fidelity: every IR node carries the originating
         TS span; emitter forwards it to GLSL/WGSL line maps
 - **Phase 3 — toolchain (~2 weeks)**
-  - [ ] `tshade-vite`: detect `vertex(...)` / `fragment(...)` /
+  - [ ] `@aardworx/wombat.shader-vite`: detect `vertex(...)` / `fragment(...)` /
         `compute(...)` calls, run frontend, replace call with
         compiled handle + serialised IR
-  - [ ] `tshade-swc`: same for non-Vite stacks
+  - [ ] `@aardworx/wombat.shader-swc`: same for non-Vite stacks
 - **Phase 4 — examples and demos**
   - [ ] hello-triangle (statically composed effect)
   - [ ] instanced-cubes (alist-driven instance buffer)

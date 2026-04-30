@@ -1,7 +1,4 @@
-node_modules/
-dist/
-*.log
+node_modules
+dist
+*.tsbuildinfo
 .DS_Store
-.vite/
-coverage/
-.turbo/

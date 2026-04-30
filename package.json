@@ -1,0 +1,19 @@
+{
+  "name": "@aardworx/wombat.shader-monorepo",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean && rm -rf packages/*/dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/ir" },
+    { "path": "./packages/glsl" },
+    { "path": "./packages/wgsl" }
+  ]
+}

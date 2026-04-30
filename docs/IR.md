@@ -1,4 +1,4 @@
-# tshade IR — concrete plan
+# wombat.shader IR — concrete plan
 
 This document specifies the C-style imperative IR that sits between the
 TypeScript frontend and the GLSL/WGSL emitters. It mirrors FShade's
@@ -28,7 +28,7 @@ types with each other.
    the frontend fills it in, emitters propagate to GLSL/WGSL line
    maps, error messages can point at the original `.tsx` source.
 6. **Aardvark naming for the shipped public types.** `V2f`/`M44f`/etc.
-   live in `tshade-types/index.d.ts`. The IR's `Type` representation
+   live in `@aardworx/wombat.shader-types/index.d.ts`. The IR's `Type` representation
    stays structural: `{ kind: "Vector", element, dim }`. The frontend
    maps `V3f` → `{ kind: "Vector", element: F32, dim: 3 }`.
 
@@ -386,7 +386,7 @@ interface BindingPoint { group: number; slot: number }
   Web targets don't need it; if we want feature gates, we generate
   separate `Module`s.
 
-## Use-def helpers (lives in `tshade-ir/visit.ts`)
+## Use-def helpers (lives in `@aardworx/wombat.shader-ir/visit.ts`)
 
 The minimum surface the optimiser needs:
 
@@ -409,9 +409,9 @@ function isPure(e: Expr): boolean;          // true iff no impure call/intrinsic
 function isSideEffectStmt(s: Stmt): boolean; // true iff Stmt has any side-effecting child
 ```
 
-Everything in `tshade-passes` is built on these.
+Everything in `@aardworx/wombat.shader-passes` is built on these.
 
-## Pass list (lives in `tshade-passes/`)
+## Pass list (lives in `@aardworx/wombat.shader-passes/`)
 
 Order matters. Passes return new IR; nothing mutates in place.
 
@@ -455,7 +455,7 @@ interface EmitResult {
 }
 ```
 
-`tshade-glsl` emits GLSL ES 3.00 (WebGL2 target). `tshade-wgsl` emits
+`@aardworx/wombat.shader-glsl` emits GLSL ES 3.00 (WebGL2 target). `@aardworx/wombat.shader-wgsl` emits
 WGSL. Both consume a fully-legalised module — `legaliseTypes` runs
 last in the pass list so the emitter doesn't need to know about
 target subtleties.
@@ -480,7 +480,7 @@ v+f IR program with deliberately-unused fragment inputs and assertions
 that the corresponding vertex outputs and their compute chains drop
 out cleanly.
 
-## Naming reminder — public types in `tshade-types`
+## Naming reminder — public types in `@aardworx/wombat.shader-types`
 
 | IR shape | Public TS name |
 | --- | --- |
