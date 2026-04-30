@@ -80,7 +80,12 @@ export function freeVarsLExpr(l: LExpr, into: Set<Var> = new Set()): ReadonlySet
   return into;
 }
 
-/** Variables read by the statement subtree (excluding the variables it declares). */
+/**
+ * Variables referenced by the subtree (read or written), excluding the
+ * Vars declared inside it. Conservative for DCE: a Var that's only
+ * written but never read still counts as "used" because the write may
+ * be load-bearing for an aliased read elsewhere.
+ */
 export function freeVarsStmt(s: Stmt): ReadonlySet<Var> {
   const reads = new Set<Var>();
   const declared = new Set<Var>();
@@ -92,6 +97,22 @@ export function freeVarsStmt(s: Stmt): ReadonlySet<Var> {
       pre(e) {
         if (e.kind === "Var" && !declared.has(e.var)) reads.add(e.var);
       },
+    },
+  });
+  // Also include LVars referenced by Write/Increment/Decrement/etc.
+  const collectLVarsFrom = (l: LExpr): void => {
+    if (l.kind === "LVar" && !declared.has(l.var)) reads.add(l.var);
+    visitLExprChildren(l, collectLVarsFrom, () => {});
+  };
+  visitStmt(s, {
+    preStmt(stmt) {
+      switch (stmt.kind) {
+        case "Write":
+        case "Increment":
+        case "Decrement":
+          collectLVarsFrom(stmt.target);
+          return;
+      }
     },
   });
   return reads;
