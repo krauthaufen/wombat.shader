@@ -1,6 +1,6 @@
 {
   "name": "@aardworx/wombat.shader-passes",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "wombat.shader optimisation passes: DCE, constant folding, CSE, inline, and the load-bearing cross-stage prune.",
   "license": "MIT",
   "type": "module",
@@ -18,7 +18,7 @@
     "src"
   ],
   "dependencies": {
-    "@aardworx/wombat.shader-ir": "0.1.0"
+    "@aardworx/wombat.shader-ir": "0.1.1"
   },
   "publishConfig": {
     "access": "public"

@@ -1,6 +1,6 @@
 {
   "name": "@aardworx/wombat.shader-ir",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "wombat.shader IR — types, visitors, JSON serialisation. The single contract between frontend, passes, and emitters.",
   "license": "MIT",
   "type": "module",

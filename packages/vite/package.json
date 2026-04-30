@@ -1,6 +1,6 @@
 {
   "name": "@aardworx/wombat.shader-vite",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Vite plugin for wombat.shader: compile shader source files at build time, replace imports with the precomputed CompiledEffect (drops the TS Compiler API from the browser bundle).",
   "license": "MIT",
   "type": "module",
@@ -18,10 +18,10 @@
     "src"
   ],
   "dependencies": {
-    "@aardworx/wombat.shader-frontend": "0.1.0",
-    "@aardworx/wombat.shader-ir": "0.1.0",
-    "@aardworx/wombat.shader-passes": "0.1.0",
-    "@aardworx/wombat.shader-runtime": "0.1.0"
+    "@aardworx/wombat.shader-frontend": "0.1.1",
+    "@aardworx/wombat.shader-ir": "0.1.1",
+    "@aardworx/wombat.shader-passes": "0.1.1",
+    "@aardworx/wombat.shader-runtime": "0.1.1"
   },
   "peerDependencies": {
     "vite": "^5.0.0 || ^6.0.0"

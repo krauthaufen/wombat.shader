@@ -1,6 +1,6 @@
 {
   "name": "@aardworx/wombat.shader-runtime",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "wombat.shader runtime: compileEffect (frontend + passes + emit), Effect / Program for WebGL2, ShaderModule for WebGPU.",
   "license": "MIT",
   "type": "module",
@@ -26,11 +26,11 @@
     "src"
   ],
   "dependencies": {
-    "@aardworx/wombat.shader-frontend": "0.1.0",
-    "@aardworx/wombat.shader-glsl": "0.1.0",
-    "@aardworx/wombat.shader-ir": "0.1.0",
-    "@aardworx/wombat.shader-passes": "0.1.0",
-    "@aardworx/wombat.shader-wgsl": "0.1.0"
+    "@aardworx/wombat.shader-frontend": "0.1.1",
+    "@aardworx/wombat.shader-glsl": "0.1.1",
+    "@aardworx/wombat.shader-ir": "0.1.1",
+    "@aardworx/wombat.shader-passes": "0.1.1",
+    "@aardworx/wombat.shader-wgsl": "0.1.1"
   },
   "publishConfig": {
     "access": "public"

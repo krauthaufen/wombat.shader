@@ -6,18 +6,18 @@ optimisation passes (cross-stage I/O elimination, function inlining,
 constant folding, CSE, DCE) and the same composition story (effects
 match outputs to inputs by semantic and fuse at IR level).
 
-This is the third leg of a three-part journey to bring
-`Aardvark.Dom`'s feature set to TypeScript:
+Shipped at `0.1.0`. Part of a port of the Aardvark stack to
+TypeScript:
 
-1. [`@aardworx/adaptive`](https://www.npmjs.com/package/@aardworx/adaptive)
+1. [`@aardworx/wombat.adaptive`](https://github.com/krauthaufen/wombat.adaptive)
    — incremental adaptive computations (`aval`/`aset`/`alist`/`amap`),
    port of `FSharp.Data.Adaptive`. ✓
-2. [`@aardworx/adaptive-ui`](https://www.npmjs.com/package/@aardworx/adaptive-ui)
-   — direct-DOM JSX runtime where adaptive values, lists, and maps sit
-   in the same JSX positions as plain values. ✓
-3. **`@aardworx/wombat.shader`** — what this repo will become. Lets adaptive
-   collections drive WebGL2 / WebGPU pipelines through real shader
-   composition with a working optimiser.
+2. [`@aardworx/wombat.base`](https://github.com/krauthaufen/wombat.base)
+   — math/geometry primitives (`V*f` / `M*f` / `Trafo3d` / …). ✓
+3. **`@aardworx/wombat.shader-*`** — this repo: TS-as-shader DSL with
+   composition + optimiser passes + WGSL / GLSL emit. ✓
+4. (in progress) `wombat.rendering` — RenderObject + RenderTask +
+   Window on top of WebGPU.
 
 ## Scope
 
@@ -77,9 +77,9 @@ collapse to three:
       WebGL2 program        WebGPU pipeline
             │                      │
             └──── @aardworx/wombat.shader-runtime ──┘
-                  • Effect / ComputeShader / sampler scope
-                  • aval-driven uniforms, alist-driven VBOs
-                  • UIScheduler integration with adaptive-ui
+                  • Effect.compile({ target }) — cached by hole-values
+                  • CompiledEffect carries a full ProgramInterface
+                  • avalBindings expose aval-driven uniform sources
 ```
 
 The IR is the contract. Frontend produces it, passes operate on it,
@@ -114,10 +114,10 @@ Everything is unit-testable from Node. Frontend is the only piece
 that imports `typescript`. Emitters take IR in and produce strings;
 they have no platform dependencies either.
 
-## Concrete low-level plan
+## IR design
 
-The IR is documented in [`docs/IR.md`](docs/IR.md). Modelled after
-FShade's `CType` / `CExpr` / `CLExpr` / `CStatement` / `CValueDef` /
+Documented in [`docs/IR.md`](docs/IR.md). Modelled after FShade's
+`CType` / `CExpr` / `CLExpr` / `CStatement` / `CValueDef` /
 `CModule` with the following deliberate departures from the F#
 original:
 
@@ -148,40 +148,36 @@ original:
   `{ kind: "..." , ... }` so build-time-emitted IR can be persisted
   and runtime can compose without re-parsing TS.
 
-## Roadmap
+## Status
 
-- **Phase 0 — IR and passes (~6 weeks)**
-  - [ ] `@aardworx/wombat.shader-ir`: every node type, type checker, pretty-printer
-        for IR-level debug output, JSON (de)serialisation
-  - [ ] `@aardworx/wombat.shader-passes`: DCE, constant folding, inlining, CSE, the
-        cross-stage pruning pass — all driven by hand-written IR
-        programs in tests
-- **Phase 1 — emitters and runtime (~3 weeks)**
-  - [ ] `@aardworx/wombat.shader-glsl`: round-trip the test IR programs to GLSL ES
-        3.00, link in WebGL2
-  - [ ] `@aardworx/wombat.shader-wgsl`: same for WGSL
-  - [ ] `@aardworx/wombat.shader-runtime`: `Effect`, `ComputeShader`, samplers,
-        adaptive uniform binding, alist-driven VBO
-- **Phase 2 — frontend (~4 weeks)**
-  - [ ] `@aardworx/wombat.shader-types`: V2/V3/V4/M2-4/sampler\* declarations
-  - [ ] `@aardworx/wombat.shader-frontend`: TS arrow-function body → IR via the
-        TypeScript compiler API. Operators (`+`/`-`/`*`/`/`/`%`/
-        comparisons) and swizzle property access translated; `if`,
-        `for`, `while`, ternaries; calls to other shader functions
-        inlined or linked; intrinsic table for built-ins
-  - [ ] Source-map fidelity: every IR node carries the originating
-        TS span; emitter forwards it to GLSL/WGSL line maps
-- **Phase 3 — toolchain (~2 weeks)**
-  - [ ] `@aardworx/wombat.shader-vite`: detect `vertex(...)` / `fragment(...)` /
-        `compute(...)` calls, run frontend, replace call with
-        compiled handle + serialised IR
-  - [ ] `@aardworx/wombat.shader-swc`: same for non-Vite stacks
-- **Phase 4 — examples and demos**
-  - [ ] hello-triangle (statically composed effect)
-  - [ ] instanced-cubes (alist-driven instance buffer)
-  - [ ] compute-particles (compute → vertex/fragment, all adaptive)
+`0.1.0` shipped on npm — every package below is published public:
 
-Total realistic budget: 3–4 months full-time for a usable v0.1.
+- [x] `@aardworx/wombat.shader-ir` — node types, type checker, IR
+      pretty-printer, JSON (de)serialisation, source-map building.
+- [x] `@aardworx/wombat.shader-passes` — DCE, constant folding,
+      inlining, CSE, cross-stage prune, uniform reduce, lift-returns,
+      type legalisation, matrix-reversal, infer-storage-access,
+      resolve-holes.
+- [x] `@aardworx/wombat.shader-glsl` — IR → GLSL ES 3.00.
+- [x] `@aardworx/wombat.shader-wgsl` — IR → WGSL.
+- [x] `@aardworx/wombat.shader-frontend` — TypeScript Compiler API
+      walker; arrow body → IR. Operators, ternaries, control flow,
+      helper-function calls, sampler / storage-buffer captures.
+- [x] `@aardworx/wombat.shader-runtime` — `compileShaderSource`,
+      `effect()` / `stage()` / `vertex()` / `fragment()` / `compute()`,
+      `CompiledEffect` with full `ProgramInterface`, hole-value
+      cache.
+- [x] `@aardworx/wombat.shader-types` — shipped `.d.ts` for
+      `V*`/`M*`/`sampler*`/intrinsics.
+- [x] `@aardworx/wombat.shader-vite` — build-time inline-marker
+      transform with TS type-checker contextual inference; `*.shader.ts`
+      module form for fully precompiled shaders.
+- [x] Examples: `hello-triangle`, `hello-triangle-webgpu`,
+      `textured-quad`, `composition`, `instanced-cubes`,
+      `compute-readback`. `wombat.rendering`'s `hello-triangle`
+      example is the first downstream consumer.
+
+Tests: 182 across 33 files; no untracked stub files.
 
 ## Math types & operators
 

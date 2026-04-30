@@ -1,6 +1,6 @@
 {
   "name": "@aardworx/wombat.shader-frontend",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript source → wombat.shader IR. Walks the TS AST for shader entry-point functions and translates each statement / expression into structural IR.",
   "license": "MIT",
   "type": "module",
@@ -18,7 +18,7 @@
     "src"
   ],
   "dependencies": {
-    "@aardworx/wombat.shader-ir": "0.1.0"
+    "@aardworx/wombat.shader-ir": "0.1.1"
   },
   "peerDependencies": {
     "typescript": ">=5.4.0"
