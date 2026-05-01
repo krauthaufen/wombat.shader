@@ -81,8 +81,16 @@ export function parseShader(input: ParseShaderInput): Module {
     const fn = translateFunction(opt, req.name);
     const derived = deriveParamShape(input, req);
     // For compute entries with a `ComputeBuiltins` parameter, the
-    // builtins go into `arguments`, not `inputs`.
-    const inputs = req.inputs ?? derived.inputs;
+    // builtins go into `arguments`, not `inputs`. When the caller
+    // supplies an explicit `req.inputs` we still need any
+    // FragmentBuiltinIn / VertexBuiltinIn members the body uses (via
+    // a second function parameter) — merge them on top so the body's
+    // `b.fragCoord` reads have a corresponding @builtin parameter.
+    const baseInputs = req.inputs ?? derived.inputs;
+    const builtinDerived = derived.inputs.filter((p) => p.decorations.some((d) => d.kind === "Builtin"));
+    const inputs = req.inputs !== undefined && builtinDerived.length > 0
+      ? mergeBuiltinInputs(baseInputs, builtinDerived)
+      : baseInputs;
     const entryArgs = derived.arguments;
     const decorations: EntryDecoration[] = [];
     const ws = req.workgroupSize ?? derived.workgroupSize;
@@ -297,6 +305,18 @@ function secondaryBuiltinShape(typeName: string): Record<string, { type: Type; s
   if (typeName === "VertexBuiltinIn")   return VERTEX_BUILTIN_IN_SHAPE;
   if (typeName === "FragmentBuiltinIn") return FRAGMENT_BUILTIN_IN_SHAPE;
   return undefined;
+}
+
+function mergeBuiltinInputs(
+  base: readonly EntryParameter[],
+  builtins: readonly EntryParameter[],
+): EntryParameter[] {
+  const seen = new Set(base.map((p) => p.name));
+  const out = [...base];
+  for (const p of builtins) {
+    if (!seen.has(p.name)) out.push(p);
+  }
+  return out;
 }
 
 function parseWorkgroupSizeJsdoc(node: ts.Node): readonly [number, number?, number?] | undefined {
