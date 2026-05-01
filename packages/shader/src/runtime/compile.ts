@@ -25,9 +25,11 @@ import {
   inlinePass,
   legaliseTypes,
   liftReturns,
+  linkFragmentOutputs,
   pruneCrossStage,
   reduceUniforms,
   reverseMatrixOps,
+  type FragmentOutputLayout,
 } from "../passes/index.js";
 import { emitGlsl, type EmitResult as GlslEmitResult } from "../glsl/index.js";
 import { emitWgsl, type EmitResult as WgslEmitResult } from "../wgsl/index.js";
@@ -96,6 +98,19 @@ export interface CompileOptions {
   readonly skipMatrixReversal?: boolean;
   /** Filename associated with the source (for source maps). */
   readonly file?: string;
+  /**
+   * Optional target framebuffer output layout. When supplied, the
+   * `linkFragmentOutputs` pass runs late in the pipeline:
+   *   - each fragment output's `Location` decoration is replaced
+   *     with `layout.locations.get(name)`;
+   *   - outputs whose names aren't in the layout are dropped, with
+   *     their `WriteOutput` statements DCE'd from the entry body;
+   *   - builtin outputs (`frag_depth`) pass through unchanged.
+   *
+   * Effect inputs / uniforms / textures keep their effect-pinned
+   * locations — only fragment outputs are re-pinned.
+   */
+  readonly fragmentOutputLayout?: FragmentOutputLayout;
 }
 
 export function compileShaderSource(
@@ -140,6 +155,12 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
     m = dce(m);
     m = pruneCrossStage(m);
     m = reduceUniforms(m);
+  }
+  // Pin fragment outputs to the target framebuffer signature, if one
+  // was provided. Runs after composition (so all outputs are visible)
+  // and before storage-access inference / legalise / emit.
+  if (options.fragmentOutputLayout !== undefined) {
+    m = linkFragmentOutputs(m, options.fragmentOutputLayout);
   }
   // Storage-buffer inference must run after the optimiser passes (which
   // may have eliminated dead writes) and before legaliseTypes (the WGSL

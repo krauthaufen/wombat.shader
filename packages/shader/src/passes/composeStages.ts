@@ -13,6 +13,13 @@
 // bodies are concatenated; B's inputs that A doesn't supply remain as
 // genuine inputs (and accumulate into the merged entry's input list).
 //
+// Following FShade: composition KEEPS every output. Carriers handle
+// dataflow between adjacent stages; outputs that aren't piped survive
+// in the merged entry. Same-named outputs across A and B follow
+// last-wins: B's output replaces A's. The fragment-output linker
+// (linkFragmentOutputs) runs at compile time against the target
+// framebuffer signature and DCE's any output the FB doesn't want.
+//
 // We don't try to stitch multiple compute kernels — they're dispatched
 // independently at runtime.
 
@@ -53,22 +60,9 @@ export function composeStages(module: Module): Module {
       for (const e of entries) fused.push({ kind: "Entry", entry: e });
       continue;
     }
-    // Reduce by sequential fusion. We pass `futureReads`: the union
-    // of `Input`-scope reads across all stages strictly downstream of
-    // the current pair. Without it, intermediate fusions would drop
-    // outputs that a later stage in the chain still needs (e.g.
-    // `pickDepthBefore + userEff + pickFinalA`: pickDepthBefore's
-    // `Depth` output is read by pickFinalA but not by userEff, so
-    // pairwise fusion of A+B was dropping it before C could see it).
     let merged = entries[0]!;
     for (let i = 1; i < entries.length; i++) {
-      const futureReads = new Set<string>();
-      for (let j = i + 1; j < entries.length; j++) {
-        for (const sn of readInputs(entries[j]!.body).values()) {
-          if (sn.scope === "Input") futureReads.add(sn.name);
-        }
-      }
-      merged = fusePair(merged, entries[i]!, futureReads);
+      merged = fusePair(merged, entries[i]!);
     }
     fused.push({ kind: "Entry", entry: merged });
   }
@@ -81,7 +75,7 @@ export function composeStages(module: Module): Module {
  * match an `a` output get replaced by reads of synthetic locals that
  * carry `a`'s written value through.
  */
-function fusePair(a: EntryDef, b: EntryDef, futureReads: ReadonlySet<string> = new Set()): EntryDef {
+function fusePair(a: EntryDef, b: EntryDef): EntryDef {
   if (a.stage !== b.stage) {
     throw new Error(`composeStages: stages must match (got ${a.stage} + ${b.stage})`);
   }
@@ -95,17 +89,11 @@ function fusePair(a: EntryDef, b: EntryDef, futureReads: ReadonlySet<string> = n
   for (const sn of readInputs(b.body).values()) {
     if (sn.scope === "Input") bInputReads.add(sn.name);
   }
-  // Carriers cover both immediate (B reads) and future (later-stage
-  // reads) consumption — when a downstream-but-not-immediate stage
-  // wants A's output we still pipe through a local var so the
-  // downstream stage's ReadInput maps cleanly without bleeding through
-  // the merged entry's output list (which would clash on Location with
-  // B's own outputs).
   const carriers = new Map<string, Var>();
   for (const out of a.outputs) {
     const isBuiltin = out.decorations.some((d) => d.kind === "Builtin");
     if (isBuiltin) continue;
-    if (!bInputReads.has(out.name) && !futureReads.has(out.name)) continue;
+    if (!bInputReads.has(out.name)) continue;
     carriers.set(out.name, {
       name: `_pipe_${out.name}`,
       type: out.type,
@@ -115,20 +103,12 @@ function fusePair(a: EntryDef, b: EntryDef, futureReads: ReadonlySet<string> = n
   const piped = new Set(carriers.keys());
 
   // 1. Rewrite `a`:
-  //    - WriteOutput(piped name) → Write(carrier).
-  //    - WriteOutput(name not consumed by b, not builtin) → Nop. In
-  //      sequential same-stage composition, `a` is producing inputs
-  //      for `b`; outputs `b` doesn't read are dead by construction.
-  //    - Other WriteOutputs (builtins) stay.
-  const aBuiltinNames = new Set(
-    a.outputs
-      .filter((p) => p.decorations.some((d) => d.kind === "Builtin"))
-      .map((p) => p.name),
-  );
-  // For redirect/output-keep decisions an A output is "needed downstream"
-  // if either B reads it OR any later stage in the chain reads it.
-  const consumed = new Set<string>([...bInputReads, ...futureReads]);
-  const aRewritten = redirectPipedWrites(a.body, carriers, consumed, aBuiltinNames);
+  //    - WriteOutput(piped name) → Write(carrier) (and keep, since the
+  //      output is also still surfaced if not in `piped`).
+  //    Other WriteOutputs stay — including ones B doesn't read; the
+  //    fragment-output linker (or pruneCrossStage for vertex-side)
+  //    handles dead-output elimination later.
+  const aRewritten = redirectPipedWrites(a.body, carriers);
 
   // 2. Rewrite `b`: ReadInput("Input", piped name) → Var(carrier).
   const bRewritten = renameInputsToVars(b.body, carriers);
@@ -138,17 +118,11 @@ function fusePair(a: EntryDef, b: EntryDef, futureReads: ReadonlySet<string> = n
     kind: "Declare", var: cv,
   }));
 
-  // 4. Outputs: `a`'s outputs minus piped names AND minus dead-to-`b`
-  //    non-builtin names; then `b`'s outputs.
-  const aOutputs = a.outputs.filter((p) => {
-    if (piped.has(p.name)) return false;
-    const isBuiltin = aBuiltinNames.has(p.name);
-    // Keep builtins, kept-by-B's-direct-read, AND anything downstream in
-    // the chain reads — outputs only get dropped when nothing reads them.
-    if (!isBuiltin && !bInputReads.has(p.name) && !futureReads.has(p.name)) return false;
-    return true;
-  });
-  const mergedOutputs = mergeParams(aOutputs, b.outputs);
+  // 4. Outputs: keep ALL of `a`'s non-piped outputs; then merge with
+  //    `b`'s outputs. Iterate B FIRST so name collisions resolve as
+  //    B-wins (last-wins ordering — B is downstream).
+  const aOutputs = a.outputs.filter((p) => !piped.has(p.name));
+  const mergedOutputs = mergeParams(b.outputs, aOutputs);
   // Inputs: `a`'s inputs always; `b`'s inputs minus piped names.
   const bInputs = b.inputs.filter((p) => !piped.has(p.name));
   const mergedInputs = mergeParams(a.inputs, bInputs);
@@ -181,12 +155,7 @@ function mergeParams(
   return out;
 }
 
-function redirectPipedWrites(
-  s: Stmt,
-  carriers: Map<string, Var>,
-  bConsumes: ReadonlySet<string>,
-  aBuiltinNames: ReadonlySet<string>,
-): Stmt {
+function redirectPipedWrites(s: Stmt, carriers: Map<string, Var>): Stmt {
   const transform = (child: Stmt): Stmt => {
     if (child.kind === "WriteOutput") {
       const cv = carriers.get(child.name);
@@ -196,12 +165,6 @@ function redirectPipedWrites(
           target: { kind: "LVar", var: cv, type: cv.type },
           value: rExprToExpr(child.value),
         };
-      }
-      // Non-piped, non-builtin write to an output that `b` doesn't read
-      // is dead in a same-stage chain: the runtime will only see `b`'s
-      // outputs. Drop it.
-      if (!aBuiltinNames.has(child.name) && !bConsumes.has(child.name)) {
-        return { kind: "Nop" };
       }
     }
     if (child.kind === "Write" && child.target.kind === "LInput"
@@ -213,9 +176,6 @@ function redirectPipedWrites(
           target: { kind: "LVar", var: cv, type: cv.type },
           value: child.value,
         };
-      }
-      if (!aBuiltinNames.has(child.target.name) && !bConsumes.has(child.target.name)) {
-        return { kind: "Nop" };
       }
     }
     return child;

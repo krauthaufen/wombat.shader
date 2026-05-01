@@ -33,6 +33,19 @@ import {
   type CompileOptions,
   type CompiledEffect,
 } from "./compile.js";
+import type { FragmentOutputLayout } from "../passes/index.js";
+
+/**
+ * Stable string key for a `FragmentOutputLayout`. Sorting by name
+ * produces a deterministic representation independent of map insertion
+ * order, so two layouts with the same (name → location) pairs hit
+ * the same cache slot.
+ */
+function layoutKey(layout: FragmentOutputLayout | undefined): string {
+  if (layout === undefined) return "";
+  const entries = [...layout.locations.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  return ":fbo[" + entries.map(([n, l]) => `${n}=${l}`).join("|") + "]";
+}
 
 export type HoleGetter = () => HoleValue;
 export type HoleGetters = Readonly<Record<string, HoleGetter>>;
@@ -137,7 +150,8 @@ function makeEffect(stages: readonly Stage[], id: string): Effect {
         sampledPerStage.push(sampled);
       }
       const cacheKey = `${id}:${hashValue(sampledPerStage)}:${options.target}` +
-        (options.skipOptimisations ? ":raw" : "");
+        (options.skipOptimisations ? ":raw" : "") +
+        layoutKey(options.fragmentOutputLayout);
       const cached = cache.get(cacheKey);
       if (cached) return cached;
 
@@ -249,7 +263,8 @@ export function computeShader(
       const sampled: Record<string, HoleValue> = {};
       for (const [name, getter] of Object.entries(holes)) sampled[name] = getter();
       const cacheKey = `${stageId}:${hashValue(sampled)}:${options.target}` +
-        (options.skipOptimisations ? ":raw" : "");
+        (options.skipOptimisations ? ":raw" : "") +
+        layoutKey(options.fragmentOutputLayout);
       const cached = cache.get(cacheKey);
       if (cached) return cached;
 

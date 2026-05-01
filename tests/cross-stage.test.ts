@@ -14,6 +14,7 @@ import {
 } from "@aardworx/wombat.shader/ir";
 import {
   composeStages,
+  linkFragmentOutputs,
   pruneCrossStage,
   reduceUniforms,
 } from "@aardworx/wombat.shader/passes";
@@ -362,16 +363,26 @@ describe("integration: composeStages → pruneCrossStage → reduceUniforms", ()
     };
 
     const composed = composeStages(m);
-    // After fusion, the carrier var holds u_dead-derived vec3, but no
-    // statement reads it. DCE inside composeStages should drop both.
+    // FShade-style composition keeps every output, so `tmp` survives
+    // (no carrier was created — fB doesn't read it). The
+    // fragment-output linker drops it when the target framebuffer
+    // signature only declares `outColor`. After link + reduceUniforms,
+    // u_dead has nothing keeping it live.
     const merged = entriesOf(composed)[0]!;
     expect(merged.stage).toBe("fragment");
-    // No more reference to u_dead anywhere?
-    const json = JSON.stringify(merged);
-    expect(json).not.toContain("u_dead");
+    // composeStages keeps `tmp`; it's not the linker's job yet.
+    expect(merged.outputs.map((o) => o.name).sort()).toEqual(["outColor", "tmp"]);
+
+    const linked = linkFragmentOutputs(composed, {
+      locations: new Map([["outColor", 0]]),
+    });
+    const linkedMerged = entriesOf(linked)[0]!;
+    expect(linkedMerged.outputs.map((o) => o.name)).toEqual(["outColor"]);
+    // After link DCE the dropped output's u_dead reference is gone.
+    expect(JSON.stringify(linkedMerged)).not.toContain("u_dead");
 
     // reduceUniforms now drops u_dead from the Uniform decl.
-    const reduced = reduceUniforms(composed);
+    const reduced = reduceUniforms(linked);
     const u = reduced.values.find((x) => x.kind === "Uniform");
     expect(u?.kind).toBe("Uniform");
     if (u?.kind === "Uniform") {
