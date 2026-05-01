@@ -58,9 +58,24 @@ function positionOfOffset(source: string, offset: number): { line: number; col: 
   return { line, col: offset - lineStart };
 }
 
+export interface LineSegment {
+  /** 0-based generated column. */
+  readonly col: number;
+  readonly span: Span;
+}
+
 export interface BuildSourceMapInput {
-  /** One entry per emitted line. `null` lines are unmapped. */
-  readonly lineSpans: ReadonlyArray<Span | undefined>;
+  /**
+   * One entry per emitted line. Each entry is the (possibly empty)
+   * list of mapping segments for that line, sorted by ascending
+   * `col`. Empty array = unmapped line.
+   *
+   * Legacy callers may still pass `lineSpans` (line-granular maps);
+   * the runtime converts them on the fly.
+   */
+  readonly lineSegments?: ReadonlyArray<readonly LineSegment[]>;
+  /** Legacy: one span per line. Mapped to a single col-0 segment per line. */
+  readonly lineSpans?: ReadonlyArray<Span | undefined>;
   /** File contents lookup keyed on `Span.file`. */
   readonly fileContents: ReadonlyMap<string, string>;
   /** Optional output filename written into the map's `file` field. */
@@ -96,32 +111,44 @@ export function buildSourceMap(input: BuildSourceMapInput): SourceMap {
     return fn(offset);
   }
 
+  // Resolve to a uniform `lineSegments` view.
+  const lineSegments: readonly (readonly LineSegment[])[] =
+    input.lineSegments
+      ?? (input.lineSpans ?? []).map(s => s ? [{ col: 0, span: s }] : []);
+
   // VLQ deltas are relative to the previous segment (across lines).
+  // Generated-column delta resets at the start of each line per the
+  // v3 spec; we track `prevGenCol` and reset it on `;` boundaries.
   let prevSourceIndex = 0;
   let prevSourceLine = 0;
   let prevSourceCol = 0;
-  // Generated-column resets to 0 at the start of each line per the
-  // v3 spec, but the inter-line ';' separator handles that — we just
-  // emit `genCol=0` for the (single) segment on each mapped line.
 
   const lines: string[] = [];
-  for (const span of input.lineSpans) {
-    if (!span) {
+  for (const segments of lineSegments) {
+    if (segments.length === 0) {
       lines.push("");
       continue;
     }
-    const idx = indexOfFile(span.file);
-    const { line, col } = pos(span.file, span.start);
-    const seg = vlqEncode([
-      0,                          // generated column
-      idx - prevSourceIndex,      // source index delta
-      line - prevSourceLine,      // source-line delta
-      col - prevSourceCol,        // source-column delta
-    ]);
-    lines.push(seg);
-    prevSourceIndex = idx;
-    prevSourceLine = line;
-    prevSourceCol = col;
+    let lineEncoded = "";
+    let prevGenCol = 0;
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i]!;
+      const idx = indexOfFile(seg.span.file);
+      const { line, col } = pos(seg.span.file, seg.span.start);
+      const fields = [
+        seg.col - prevGenCol,
+        idx - prevSourceIndex,
+        line - prevSourceLine,
+        col - prevSourceCol,
+      ];
+      if (i > 0) lineEncoded += ",";
+      lineEncoded += vlqEncode(fields);
+      prevGenCol = seg.col;
+      prevSourceIndex = idx;
+      prevSourceLine = line;
+      prevSourceCol = col;
+    }
+    lines.push(lineEncoded);
   }
 
   const out: SourceMap = {

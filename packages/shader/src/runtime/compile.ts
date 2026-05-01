@@ -180,7 +180,7 @@ function emitAll(module: Module, target: Target): CompiledEffect {
     } else {
       const r = emitWgsl(module, v.entry.name);
       const sourceMap = anyMapped(r.lineSpans)
-        ? buildSourceMap({ lineSpans: r.lineSpans, fileContents })
+        ? buildSourceMap({ lineSegments: r.lineSegments, fileContents })
         : null;
       stages.push({
         stage: v.entry.stage, entryName: v.entry.name, source: r.source,

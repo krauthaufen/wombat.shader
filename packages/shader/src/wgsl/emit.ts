@@ -33,10 +33,16 @@ export interface EmitResult {
   readonly bindings: BindingMap;
   readonly meta: BackendMeta;
   /**
-   * Per-emitted-line spans (`undefined` for unmapped lines such as
-   * blank lines and infrastructure scaffolding). Length matches the
-   * line count in `source`. Used by the runtime to build a
-   * `SourceMap` keyed on the user's TS file.
+   * Per-emitted-line *segments* — a list of `(col, span)` entries
+   * per line, sorted by ascending column. `[]` for unmapped lines
+   * (blank lines, scaffolding). The runtime pipes this directly
+   * into `buildSourceMap` to produce a v3 source map.
+   */
+  readonly lineSegments: ReadonlyArray<readonly { col: number; span: import("../ir/index.js").Span }[]>;
+
+  /**
+   * @deprecated Use `lineSegments`. Per-line first-segment view kept
+   * for backwards compatibility; produces a strictly-coarser map.
    */
   readonly lineSpans: ReadonlyArray<import("../ir/index.js").Span | undefined>;
 }
@@ -121,6 +127,7 @@ export function emitWgsl(module: Module, entryName?: string): EmitResult {
       version: "wgsl",
       workgroupSize: workgroupSize(entry),
     },
+    lineSegments: w.lineSegments,
     lineSpans: w.lineSpans,
   };
 }
@@ -163,26 +170,116 @@ function pickEntry(module: Module, entryName?: string): EntryDef {
   return entries[0]!;
 }
 
+type Span = import("../ir/index.js").Span;
+
+interface LineSegment {
+  /** 0-based generated column where this segment starts. */
+  readonly col: number;
+  readonly span: Span;
+}
+
+/**
+ * Writer that builds an emitted text buffer plus a per-line list of
+ * source-map segments. Emit code uses two patterns:
+ *
+ *   1. Whole-line: `setSpan(stmt.span); line("text")` — registers
+ *      one segment at column 0 of the line.
+ *   2. Piecewise: `setSpan(stmt.span); write("a = "); writeSpan(rhs.span); write(expr(rhs)); endLine(";")` —
+ *      registers one segment per `setSpan`/`writeSpan` call at the
+ *      column the next character would land at.
+ *
+ * Segments accumulate in `lineSegments[generatedLine]`; whole-line
+ * setSpan always places the line's first segment at col 0.
+ */
 class Writer {
   private readonly parts: string[] = [];
   private indent = 0;
-  private currentSpan: import("../ir/index.js").Span | undefined;
-  /** One entry per emitted line; `undefined` for unmapped lines. */
-  readonly lineSpans: (import("../ir/index.js").Span | undefined)[] = [];
+  private currentSpan: Span | undefined;
+  /** Pending content for the current line (not yet committed). */
+  private pendingText = "";
+  /** Pending segments for the current line (not yet committed). */
+  private pendingSegments: LineSegment[] = [];
+  /** Per-line segment lists. Index 0 = first emitted line. */
+  readonly lineSegments: LineSegment[][] = [];
 
   line(s: string): void {
-    this.parts.push("    ".repeat(this.indent) + s + "\n");
-    this.lineSpans.push(this.currentSpan);
+    if (this.pendingText.length === 0 && this.pendingSegments.length === 0) {
+      // Fast path: whole-line emit. Register one segment at col 0
+      // if a span has been set.
+      const segments: LineSegment[] = [];
+      if (this.currentSpan !== undefined) {
+        segments.push({ col: 0, span: this.currentSpan });
+      }
+      this.parts.push("    ".repeat(this.indent) + s + "\n");
+      this.lineSegments.push(segments);
+      return;
+    }
+    // Piecewise path: flush pending then append.
+    this.write(s);
+    this.endLine();
   }
+
+  /** Append `s` to the current line without finalising it. */
+  write(s: string): void {
+    if (this.pendingText.length === 0) {
+      this.pendingText = "    ".repeat(this.indent);
+      // Default-segment for current span at the start of this line.
+      if (this.currentSpan !== undefined) {
+        this.pendingSegments.push({ col: 0, span: this.currentSpan });
+      }
+    }
+    this.pendingText += s;
+  }
+
+  /** Register a sub-line segment at the current cursor for `span`. */
+  writeSpan(span: Span | undefined): void {
+    if (span === undefined) return;
+    const col = this.pendingText.length === 0
+      ? "    ".repeat(this.indent).length
+      : this.pendingText.length;
+    // De-dupe consecutive segments referring to the same span.
+    const last = this.pendingSegments[this.pendingSegments.length - 1];
+    if (last && last.span === span && last.col === col) return;
+    this.pendingSegments.push({ col, span });
+  }
+
+  /** Finalise the current line, optionally appending `s` first. */
+  endLine(s: string = ""): void {
+    if (s.length > 0) this.write(s);
+    if (this.pendingText.length === 0) {
+      this.parts.push("\n");
+      this.lineSegments.push([]);
+    } else {
+      this.parts.push(this.pendingText + "\n");
+      this.lineSegments.push(this.pendingSegments);
+    }
+    this.pendingText = "";
+    this.pendingSegments = [];
+  }
+
   blank(): void {
+    if (this.pendingText.length > 0 || this.pendingSegments.length > 0) {
+      this.endLine();
+    }
     this.parts.push("\n");
-    this.lineSpans.push(undefined);
+    this.lineSegments.push([]);
   }
   inc(): void { this.indent++; }
   dec(): void { this.indent = Math.max(0, this.indent - 1); }
-  setSpan(s: import("../ir/index.js").Span | undefined): void {
+  setSpan(s: Span | undefined): void {
     this.currentSpan = s;
   }
+
+  /**
+   * Backwards-compatible view: one span per line (the line's first
+   * segment, or `undefined` if the line is unmapped). Older
+   * source-map builders use this; new builders consume
+   * `lineSegments` directly.
+   */
+  get lineSpans(): (Span | undefined)[] {
+    return this.lineSegments.map(ss => ss[0]?.span);
+  }
+
   toString(): string { return this.parts.join(""); }
 }
 
@@ -401,22 +498,37 @@ function emitStmt(ctx: Ctx, s: Stmt): void {
   switch (s.kind) {
     case "Nop":
       return;
-    case "Expression":
-      ctx.out.line(`${expr(s.value)};`);
+    case "Expression": {
+      // Per-expression span: emit `expr;` with a segment registered
+      // at the expression's own span position.
+      const v = s.value as { span?: Span };
+      ctx.out.write("");
+      if (v.span) ctx.out.writeSpan(v.span);
+      ctx.out.endLine(`${expr(s.value)};`);
       return;
+    }
     case "Declare": {
       const init = s.init ? ` = ${rexpr(s.init)}` : "";
       const keyword = s.var.mutable ? "var" : "let";
       ctx.out.line(`${keyword} ${s.var.name}: ${typeStr(s.var.type)}${init};`);
       return;
     }
-    case "Write":
-      ctx.out.line(`${lexpr(s.target)} = ${expr(s.value)};`);
+    case "Write": {
+      // `target = value;` — register a segment at the RHS so that
+      // diagnostics on the value side jump to the right TS column.
+      ctx.out.write(`${lexpr(s.target)} = `);
+      const v = s.value as { span?: Span };
+      if (v.span) ctx.out.writeSpan(v.span);
+      ctx.out.endLine(`${expr(s.value)};`);
       return;
+    }
     case "WriteOutput": {
       // Stage outputs in WGSL are fields on the synthetic `out` struct.
       const idx = s.index ? `[${expr(s.index)}]` : "";
-      ctx.out.line(`out.${s.name}${idx} = ${rexpr(s.value)};`);
+      ctx.out.write(`out.${s.name}${idx} = `);
+      const v = s.value as { span?: Span };
+      if (v.span) ctx.out.writeSpan(v.span);
+      ctx.out.endLine(`${rexpr(s.value)};`);
       return;
     }
     case "Increment":
