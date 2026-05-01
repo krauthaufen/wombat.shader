@@ -53,10 +53,22 @@ export function composeStages(module: Module): Module {
       for (const e of entries) fused.push({ kind: "Entry", entry: e });
       continue;
     }
-    // Reduce by sequential fusion.
+    // Reduce by sequential fusion. We pass `futureReads`: the union
+    // of `Input`-scope reads across all stages strictly downstream of
+    // the current pair. Without it, intermediate fusions would drop
+    // outputs that a later stage in the chain still needs (e.g.
+    // `pickDepthBefore + userEff + pickFinalA`: pickDepthBefore's
+    // `Depth` output is read by pickFinalA but not by userEff, so
+    // pairwise fusion of A+B was dropping it before C could see it).
     let merged = entries[0]!;
     for (let i = 1; i < entries.length; i++) {
-      merged = fusePair(merged, entries[i]!);
+      const futureReads = new Set<string>();
+      for (let j = i + 1; j < entries.length; j++) {
+        for (const sn of readInputs(entries[j]!.body).values()) {
+          if (sn.scope === "Input") futureReads.add(sn.name);
+        }
+      }
+      merged = fusePair(merged, entries[i]!, futureReads);
     }
     fused.push({ kind: "Entry", entry: merged });
   }
@@ -69,7 +81,7 @@ export function composeStages(module: Module): Module {
  * match an `a` output get replaced by reads of synthetic locals that
  * carry `a`'s written value through.
  */
-function fusePair(a: EntryDef, b: EntryDef): EntryDef {
+function fusePair(a: EntryDef, b: EntryDef, futureReads: ReadonlySet<string> = new Set()): EntryDef {
   if (a.stage !== b.stage) {
     throw new Error(`composeStages: stages must match (got ${a.stage} + ${b.stage})`);
   }
@@ -107,7 +119,10 @@ function fusePair(a: EntryDef, b: EntryDef): EntryDef {
       .filter((p) => p.decorations.some((d) => d.kind === "Builtin"))
       .map((p) => p.name),
   );
-  const aRewritten = redirectPipedWrites(a.body, carriers, bInputReads, aBuiltinNames);
+  // For redirect/output-keep decisions an A output is "needed downstream"
+  // if either B reads it OR any later stage in the chain reads it.
+  const consumed = new Set<string>([...bInputReads, ...futureReads]);
+  const aRewritten = redirectPipedWrites(a.body, carriers, consumed, aBuiltinNames);
 
   // 2. Rewrite `b`: ReadInput("Input", piped name) → Var(carrier).
   const bRewritten = renameInputsToVars(b.body, carriers);
@@ -122,7 +137,9 @@ function fusePair(a: EntryDef, b: EntryDef): EntryDef {
   const aOutputs = a.outputs.filter((p) => {
     if (piped.has(p.name)) return false;
     const isBuiltin = aBuiltinNames.has(p.name);
-    if (!isBuiltin && !bInputReads.has(p.name)) return false;
+    // Keep builtins, kept-by-B's-direct-read, AND anything downstream in
+    // the chain reads — outputs only get dropped when nothing reads them.
+    if (!isBuiltin && !bInputReads.has(p.name) && !futureReads.has(p.name)) return false;
     return true;
   });
   const mergedOutputs = mergeParams(aOutputs, b.outputs);
