@@ -209,29 +209,52 @@ function deriveParamShape(
   const source = ts.createSourceFile(input.file ?? "<input>", input.source, ts.ScriptTarget.ES2022, true);
   let fnNode: ts.Node | undefined;
   let firstParamType: ts.TypeNode | undefined;
+  let secondParamType: ts.TypeNode | undefined;
   ts.forEachChild(source, (node) => {
     if (fnNode) return;
     if (ts.isFunctionDeclaration(node) && node.name?.text === req.name) {
       fnNode = node;
       firstParamType = node.parameters[0]?.type;
+      secondParamType = node.parameters[1]?.type;
     } else if (ts.isVariableStatement(node)) {
       for (const d of node.declarationList.declarations) {
         if (ts.isIdentifier(d.name) && d.name.text === req.name && d.initializer) {
           if (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer)) {
             fnNode = node;
             firstParamType = d.initializer.parameters[0]?.type;
+            secondParamType = d.initializer.parameters[1]?.type;
           }
         }
       }
     }
   });
   const ws = fnNode ? parseWorkgroupSizeJsdoc(fnNode) : undefined;
-  if (!firstParamType) return { inputs: [], arguments: [], ...(ws ? { workgroupSize: ws } : {}) };
+  // Second-param builtin record (e.g. `b: FragmentBuiltinIn`): every
+  // member with a `BuiltinName` semantic surfaces as an entry input
+  // with `kind: "Builtin"`, even though the body's reference is via
+  // `b.member`. Without this, the emitter has no parameter declared
+  // for the builtin and the WGSL refers to an unbound name like
+  // `position.z` — composeStages's fusion magnified the surprise but
+  // the underlying gap is here.
+  const secondaryBuiltins: EntryParameter[] = [];
+  if (secondParamType && ts.isTypeReferenceNode(secondParamType) && ts.isIdentifier(secondParamType.typeName)) {
+    const shape = secondaryBuiltinShape(secondParamType.typeName.text);
+    if (shape) {
+      for (const [name, spec] of Object.entries(shape)) {
+        secondaryBuiltins.push(paramOfBuiltin(name, spec.type, spec.semantic));
+      }
+    }
+  }
+  if (!firstParamType) return { inputs: secondaryBuiltins, arguments: [], ...(ws ? { workgroupSize: ws } : {}) };
   if (ts.isTypeReferenceNode(firstParamType) && ts.isIdentifier(firstParamType.typeName)) {
     const args = builtinArgumentsForRecord(firstParamType.typeName.text);
-    if (args) return { inputs: [], arguments: args, ...(ws ? { workgroupSize: ws } : {}) };
+    if (args) return { inputs: secondaryBuiltins, arguments: args, ...(ws ? { workgroupSize: ws } : {}) };
   }
-  return { inputs: inputsFromTypeNode(firstParamType), arguments: [], ...(ws ? { workgroupSize: ws } : {}) };
+  return {
+    inputs: [...inputsFromTypeNode(firstParamType), ...secondaryBuiltins],
+    arguments: [],
+    ...(ws ? { workgroupSize: ws } : {}),
+  };
 }
 
 const COMPUTE_BUILTIN_PARAMS: readonly EntryParameter[] = [
@@ -259,6 +282,20 @@ function builtinArgumentsForRecord(typeName: string): readonly EntryParameter[] 
   if (typeName === "ComputeBuiltins") return COMPUTE_BUILTIN_PARAMS;
   // Vertex/fragment builtins are surfaced via inputs (decorations carry
   // `Builtin` so the emitter handles them through the input struct).
+  return undefined;
+}
+
+const VERTEX_BUILTIN_IN_SHAPE: Record<string, { type: Type; semantic: import("../ir/index.js").BuiltinSemantic }> = {
+  vertexIndex:   { type: { kind: "Int", signed: false, width: 32 }, semantic: "vertex_index" },
+  instanceIndex: { type: { kind: "Int", signed: false, width: 32 }, semantic: "instance_index" },
+};
+const FRAGMENT_BUILTIN_IN_SHAPE: Record<string, { type: Type; semantic: import("../ir/index.js").BuiltinSemantic }> = {
+  fragCoord:    { type: { kind: "Vector", element: { kind: "Float", width: 32 }, dim: 4 }, semantic: "position" },
+};
+
+function secondaryBuiltinShape(typeName: string): Record<string, { type: Type; semantic: import("../ir/index.js").BuiltinSemantic }> | undefined {
+  if (typeName === "VertexBuiltinIn")   return VERTEX_BUILTIN_IN_SHAPE;
+  if (typeName === "FragmentBuiltinIn") return FRAGMENT_BUILTIN_IN_SHAPE;
   return undefined;
 }
 

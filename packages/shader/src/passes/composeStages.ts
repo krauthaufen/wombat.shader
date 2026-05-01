@@ -95,11 +95,17 @@ function fusePair(a: EntryDef, b: EntryDef, futureReads: ReadonlySet<string> = n
   for (const sn of readInputs(b.body).values()) {
     if (sn.scope === "Input") bInputReads.add(sn.name);
   }
+  // Carriers cover both immediate (B reads) and future (later-stage
+  // reads) consumption — when a downstream-but-not-immediate stage
+  // wants A's output we still pipe through a local var so the
+  // downstream stage's ReadInput maps cleanly without bleeding through
+  // the merged entry's output list (which would clash on Location with
+  // B's own outputs).
   const carriers = new Map<string, Var>();
   for (const out of a.outputs) {
     const isBuiltin = out.decorations.some((d) => d.kind === "Builtin");
     if (isBuiltin) continue;
-    if (!bInputReads.has(out.name)) continue;
+    if (!bInputReads.has(out.name) && !futureReads.has(out.name)) continue;
     carriers.set(out.name, {
       name: `_pipe_${out.name}`,
       type: out.type,
