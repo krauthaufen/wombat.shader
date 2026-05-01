@@ -1,116 +1,138 @@
 # wombat.shader
 
-TypeScript port of [FShade](https://fshade.org). The pipeline:
-**TS shader source → IR → optimisation passes → GLSL ES 3.00 / WGSL emit**.
-See [`README.md`](README.md) for scope and roadmap, [`docs/IR.md`](docs/IR.md)
-for the canonical IR specification.
+TypeScript port of FShade. Write shaders as TS arrow functions, get
+WGSL/GLSL out via the same IR-level optimiser passes as the F#
+original. Two published packages: `@aardworx/wombat.shader` (the
+runtime + IR + frontend + emitters + types, all in one tree) and
+`@aardworx/wombat.shader-vite` (the build-time inline-marker plugin).
 
-## Workspace layout
-
-npm workspaces, TypeScript project references. Each package builds to its
-own `dist/` and depends on others via the workspace symlink.
+## Repository layout
 
 ```
-wombat.shader/
-├─ packages/
-│  ├─ ir/      @aardworx/wombat.shader-ir       — IR types + visitors + JSON
-│  ├─ passes/  @aardworx/wombat.shader-passes   — foldConstants/dce/cse/inline
-│  ├─ glsl/    @aardworx/wombat.shader-glsl     — IR → GLSL ES 3.00
-│  └─ wgsl/    @aardworx/wombat.shader-wgsl     — IR → WGSL
-└─ tests/      vitest tests at the root
+packages/
+├── shader/   @aardworx/wombat.shader
+│             src/
+│             ├── ir/         IR types, visitors, source-map writer
+│             ├── frontend/   TS source → IR (uses TS Compiler API)
+│             ├── passes/     optimiser passes
+│             ├── glsl/       IR → GLSL ES 3.00 emit
+│             ├── wgsl/       IR → WGSL emit
+│             ├── runtime/    Effect / ComputeShader / compileShaderSource
+│             │   └── webgpu/, webgl2/    backend-specific helpers
+│             ├── types/      shipped TS declarations users import in
+│             │               shader source (V*/M*/sampler/intrinsic)
+│             └── index.ts    re-exports the runtime API
+└── vite/     @aardworx/wombat.shader-vite
+              src/inline.ts   transformInlineShaders() — marker rewrite
+              src/index.ts    Vite plugin
+              src/typeMapper.ts, typeResolver.ts
 ```
 
-Future packages (planned, not yet present): `frontend/`, `types/`,
-`runtime/`, `vite/`, `swc/`. See `README.md` roadmap.
-
-## Passes
-
-Every pass is `(Module) → Module`. Pure functions, no mutation. Compose
-freely:
-
-```ts
-const optimised = dce(cse(foldConstants(inlinePass(m))));
-```
-
-Implementation rules:
-
-- Use the helpers in `packages/passes/src/transform.ts` (`mapExpr`,
-  `mapStmt`, `mapStmtChildren`) — these preserve referential equality
-  on unchanged subtrees so subsequent passes can short-circuit.
-- Use `analysis.ts` for `isPure`, `freeVarsStmt`, `readInputs`,
-  `writtenOutputs`. Don't roll your own walk.
-- Within a pass, prefer post-order: fold children, then the parent.
-  `mapExpr(e, fn)` is post-order by default.
-- `mapStmt(s, m)` recurses into nested Stmts automatically. If `m.stmt`
-  is provided, it's applied to every child (post-order). To process the
-  outermost Stmt as well, wrap: `m.stmt(mapStmt(s, m))`.
-
-When extending a pass, add a hand-built IR test in `tests/passes.test.ts`
-demonstrating the rewrite. Don't rely on snapshot tests for passes —
-assert structurally on the resulting IR.
+Originally split into 8 packages (ir / frontend / passes / glsl /
+wgsl / runtime / types / vite) — collapsed to 2 in 0.2.0. Internal
+imports inside `packages/shader/src/<sub>/` use relative paths
+(`../ir/index.js` etc.); the package's subpath exports surface each
+subdir.
 
 ## Tooling
 
-- `npm run build` — `tsc -b` across the workspace, respects project
-  references. Each package emits `.d.ts`, `.js`, source maps.
-- `npm test` — vitest. Tests live at `tests/`. Each emitter test
-  hand-builds an IR Module and compares emitter output via
-  `toMatchInlineSnapshot` or substring assertions.
+- `npm test` — vitest, 182 tests covering IR↔WGSL/GLSL round-trips,
+  inline-marker plugin pipeline, optimiser passes.
 - `npm run typecheck` — `tsc -b --noEmit`.
+- `npm run build` — emits `dist/` per package via `tsc -b`.
 
-## IR is the contract
+Real-GPU validation lives downstream in
+[`wombat.rendering`](https://github.com/krauthaufen/wombat.rendering)
+(Playwright + system Chromium + Vulkan).
 
-Every node is a discriminated union on `kind`. JSON-serialisable. No
-runtime classes. The frontend (TS source → IR), the passes
-(IR → IR), and the emitters (IR → string) all communicate only through
-this shape. The IR types live in `packages/ir/src/types.ts` and re-export
-through `index.ts`. **Don't add ad-hoc fields to nodes** — extend the
-discriminated union with a new `kind` and update visitors and emitters.
+## Architecture
 
-When adding a new IR node:
-1. Add the variant in `packages/ir/src/types.ts`.
-2. Add it to `visitExprChildren` / `visitLExprChildren` / `visitStmt`
-   in `packages/ir/src/visit.ts` so passes traverse it.
-3. Handle it in **both** emitters (`packages/glsl/src/emit.ts`,
-   `packages/wgsl/src/emit.ts`). TypeScript exhaustiveness checks should
-   force this if you switch on `e.kind` without a default.
-4. Add a test exercising the new node.
+```
+TS source ──► parseShader ──► IR Module ──► passes ──► emit{wgsl,glsl} ──► CompiledEffect
+              (frontend)                  (passes)       (wgsl/glsl)
+```
 
-## Composition vs. lowering
+- **frontend** (`parseShader`): walks the TS AST for the named
+  entries, lowers expressions/statements to IR. Free identifiers
+  resolved via `externalTypes` (storage buffers / uniforms /
+  samplers); `b: ComputeBuiltins` parameter recognised for compute
+  builtins. Helper-function support via `helpers: string[]`.
+- **passes**: `liftReturns` (bare-value → WriteOutput), `inline`,
+  `reduceUniforms`, `cse`, `foldConstants`, `dce`, `composeStages`
+  (v+v / f+f fuse), `pruneCrossStage`, `inferStorageAccess`,
+  `legaliseTypes`, `reverseMatrixOps`, `resolveHoles` (closure-hole
+  specialisation).
+- **emitters**: WGSL emits per-segment source maps (per-Expr
+  granularity for assignments + expression statements). GLSL emits
+  line-granular maps. Both produce a `bindings` summary
+  (uniformBlocks/storageBuffers/textures/samplers with group/slot).
+- **runtime**: `Effect` / `ComputeShader` / `compileShaderSource` /
+  `compile({ target })`. `Effect.id` is a build-time stable hash
+  (downstream pipeline cache key).
 
-Some IR nodes are intentionally high-level and require an upstream
-*legalisation* pass to translate them into target-specific shapes:
+## Markers
 
-- `MatrixRow` — neither GLSL nor WGSL has a direct row accessor. Lower
-  to `MatrixElement` reads, or to `transpose(...)[r]`.
-- `MatrixFromRows` — both backends construct matrices column-major.
-  Frontend should lower to `MatrixFromCols` of a transposed input, or
-  emit `transpose(MatrixFromCols(...))`.
-- `Inverse` for matrices is built into GLSL but not WGSL — WGSL needs
-  a user-supplied helper. Legalisation should inject one when needed.
-- `DebugPrintf` — neither backend supports it. Currently emits a noop
-  comment; passes should drop these in production builds.
-- `Texture` (without an accompanying `Sampler`) is invalid in GLSL —
-  fold combined samplers when targeting GLSL.
+`vertex`/`fragment`/`compute` in `packages/shader/src/runtime/stage.ts`
+are zero-runtime stubs that throw if called at runtime. The Vite
+plugin scans for them and replaces each call with a frozen IR
+template:
 
-The emitters each have a defensive comment-and-noop path for the
-"frontend should have lowered this" cases so unlowered IR doesn't
-silently produce wrong code; it produces obviously wrong code.
+- `vertex(...)` and `fragment(...)` → `__wombat_stage(template, holes, id, avalHoles)` → returns an `Effect`
+- `compute(...)` → `__wombat_compute(...)` → returns a `ComputeShader`
+  (single stage, peer of Effect, no graphics pipeline state).
 
-## Composition convention
+`__wombat_stage` and `__wombat_compute` are the runtime functions
+`stage` and `computeShader` in `runtime/stage.ts`.
 
-Matrix · matrix uses standard math convention (do RHS first then LHS),
-matching every other math type in the wombat stack except `Trafo3d` /
-`Trafo2d` (which intentionally compose left-to-right). The IR doesn't
-encode a "trafo" — that lives in the frontend translation rules.
+## Closure holes
+
+Free identifiers in a marker arrow body that aren't intrinsics or
+ambient declarations are treated as **closure captures**, encoded as
+`ReadInput("Closure", name, type)` in the IR and specialised at
+`compile()` time as constants. Different captured values → different
+specialised shader. The build plugin emits a getter map per call;
+the runtime samples it on each compile.
+
+Aval-typed captures get separate plumbing (`avalHoles`) — the
+backend subscribes via the rendering layer's `ProgramInterface` and
+writes the GPU buffer slot when the value changes.
+
+## WGSL builtin convention
+
+Compute entry parameters use the **semantic name** (snake_case)
+both in the signature and the body — e.g.
+`@builtin(global_invocation_id) global_invocation_id: vec3<u32>`,
+body reads `global_invocation_id.x`. Without this alignment the
+generated WGSL fails to validate (the body uses one name and the
+signature declares another). The rendering layer's compute test
+catches regressions of this on real GPU.
+
+## Source maps
+
+Per-line, per-segment v3 maps written via
+`packages/shader/src/ir/sourcemap.ts`'s `buildSourceMap`. Inputs:
+
+- `lineSegments: ReadonlyArray<readonly { col, span }[]>` (preferred,
+  multi-segment).
+- `lineSpans: ReadonlyArray<Span | undefined>` (legacy, line-only —
+  internally normalised to single-segment lines).
+
+The WGSL Writer (`packages/shader/src/wgsl/emit.ts`) supports
+piecewise emit via `write()` / `writeSpan()` / `endLine()` for
+sub-line segments, with `setSpan()` / `line()` as the whole-line
+shortcut.
 
 ## Don'ts
 
-- Don't put runtime classes in the IR. Plain `{kind, ...}` only — JSON
-  must round-trip.
-- Don't import `typescript` (the compiler) from `ir/`, `glsl/`, or
-  `wgsl/`. Only the future `frontend/` package may.
-- Don't write platform-specific code (DOM, WebGL, WebGPU) in `ir/`,
-  `glsl/`, or `wgsl/`. Emitters return strings — they don't link.
-- Don't use `as any` to dodge the exhaustiveness checker on `Expr.kind`.
-  If you're patching one emitter, patch the other.
+- Don't add new packages. The collapse to 2 was deliberate; subpath
+  exports cover the granularity needs.
+- Don't break the WGSL builtin-name alignment (signature param name
+  must equal the @builtin semantic for compute arguments).
+- Don't edit `dist/` directly — it's emitted by `tsc -b`.
+- Don't `npm publish` from a dirty tree, and bump both
+  `@aardworx/wombat.shader` and `@aardworx/wombat.shader-vite` in
+  lockstep (vite's dep is pinned, not a range).
+- Don't rely on `Effect.id` being stable across **closure-hole
+  values** — closure captures DO move the id. They don't move
+  across builds with the same captures, which is what the
+  consumer's pipeline cache wants.
