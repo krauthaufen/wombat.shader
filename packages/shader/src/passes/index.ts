@@ -10,6 +10,7 @@ export { pruneCrossStage } from "./pruneCrossStage.js";
 export { composeStages } from "./composeStages.js";
 export { linkFragmentOutputs } from "./linkFragmentOutputs.js";
 export type { FragmentOutputLayout } from "./linkFragmentOutputs.js";
+export { linkCrossStage, paramKey } from "./linkCrossStage.js";
 export {
   effectDependencies,
   type OutputDep,

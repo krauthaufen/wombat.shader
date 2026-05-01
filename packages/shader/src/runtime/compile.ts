@@ -25,6 +25,7 @@ import {
   inlinePass,
   legaliseTypes,
   liftReturns,
+  linkCrossStage,
   linkFragmentOutputs,
   pruneCrossStage,
   reduceUniforms,
@@ -149,18 +150,34 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
   let m = liftReturns(module);
   if (!options.skipOptimisations) {
     m = composeStages(m);
+    // FShade-style cross-stage linker: matches VS outputs <-> FS inputs
+    // by semantic (with name fallback), renames FS inputs to the VS
+    // output names, and synthesises auto pass-throughs from VS
+    // attributes when a semantic-matched VS output is missing.
+    // Runs BEFORE linkFragmentOutputs so FS-input name changes propagate
+    // before any further DCE / pruning.
+    m = linkCrossStage(m);
+  }
+  // Pin fragment outputs to the target framebuffer signature, if one
+  // was provided. Runs after composition + cross-stage linking and
+  // before pruneCrossStage / DCE so dead fragment outputs (and the
+  // cross-stage inputs that fed only them) get cleaned up below.
+  if (options.fragmentOutputLayout !== undefined) {
+    m = linkFragmentOutputs(m, options.fragmentOutputLayout);
+  }
+  if (!options.skipOptimisations) {
     m = inlinePass(m);
     m = foldConstants(m);
     m = cse(m);
     m = dce(m);
+    // pruneCrossStage runs AFTER linkFragmentOutputs so that dead
+    // fragment outputs have already been removed (and their reads
+    // DCE'd). The pass is iterative: dropping a VS output may shrink
+    // VS-body reads, which can in turn allow dropping more outputs in
+    // a downstream sibling — handled by the fixed-point loop inside
+    // pruneCrossStage itself.
     m = pruneCrossStage(m);
     m = reduceUniforms(m);
-  }
-  // Pin fragment outputs to the target framebuffer signature, if one
-  // was provided. Runs after composition (so all outputs are visible)
-  // and before storage-access inference / legalise / emit.
-  if (options.fragmentOutputLayout !== undefined) {
-    m = linkFragmentOutputs(m, options.fragmentOutputLayout);
   }
   // Storage-buffer inference must run after the optimiser passes (which
   // may have eliminated dead writes) and before legaliseTypes (the WGSL
