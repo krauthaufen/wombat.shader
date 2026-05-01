@@ -454,10 +454,14 @@ function emitEntryFunction(ctx: Ctx, e: EntryDef, io: EntryIO): void {
   if (io.inputStructName) {
     params.push(`in: ${io.inputStructName}`);
   }
-  // Builtin inputs come as separate parameters.
+  // Builtin inputs come as separate parameters. Use the semantic
+  // (`position`, `front_facing`, ...) as the parameter NAME so the
+  // body's `ReadInput("Builtin", semantic)` reads (which the emitter
+  // lowers as the bare semantic name) line up. This mirrors how the
+  // compute-stage builtin args are emitted further down.
   for (const p of e.inputs) {
     const b = builtinName(p);
-    if (b) params.push(`@builtin(${b}) ${p.name}: ${typeStr(p.type)}`);
+    if (b) params.push(`@builtin(${b}) ${b}: ${typeStr(p.type)}`);
   }
   // Compute stage's `arguments` array carries workgroup-style builtins
   // as well. The body's `ReadInput("Builtin", semantic)` references the
