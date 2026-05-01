@@ -14,7 +14,13 @@ let workdir: string;
 let resolver: TypeResolver;
 
 function extractTemplate(code: string): Module {
-  const idx = code.indexOf("__wombat_stage(");
+  const idx = (() => {
+    const a = code.indexOf("__wombat_stage(");
+    const b = code.indexOf("__wombat_compute(");
+    if (a < 0) return b;
+    if (b < 0) return a;
+    return Math.min(a, b);
+  })();
   let i = code.indexOf("{", idx);
   const start = i;
   let depth = 0;

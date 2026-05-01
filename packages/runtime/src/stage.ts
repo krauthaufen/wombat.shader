@@ -195,7 +195,72 @@ export function vertex<I, O = unknown>(_fn: (input: I) => O): Effect {
 export function fragment<I, O = unknown>(_fn: (input: I) => O): Effect {
   throw new Error(NOT_PROCESSED);
 }
-/** Marker — replaced at build time. Returns a single-stage Effect. */
-export function compute<B>(_fn: (builtins: B) => void): Effect {
+/**
+ * Marker — replaced at build time. Returns a `ComputeShader`,
+ * which is its own peer to `Effect`: a compute pipeline always has
+ * exactly one stage, so it doesn't need the multi-stage composition
+ * machinery `Effect` carries. Consumed by the rendering layer's
+ * imperative compute API (input bindings + dispatch).
+ */
+export function compute<B>(_fn: (builtins: B) => void): ComputeShader {
   throw new Error(NOT_PROCESSED);
+}
+
+/**
+ * User-facing object for a compute pipeline. One stage, plus
+ * `compile(options)` returning a `CompiledEffect` (whose
+ * `stages` has length 1 with `stage === "compute"`). The id is the
+ * stage's IR-shape hash; stable across builds.
+ *
+ * The runtime uses the same closure-getter / aval-getter machinery
+ * as `Effect`, just specialised to a single stage. The build
+ * plugin emits `__wombat_compute(template, holes, id, avalHoles)`
+ * which produces this object.
+ */
+export interface ComputeShader {
+  readonly stage: Stage;
+  readonly id: string;
+  compile(options: CompileOptions): CompiledEffect;
+  /** Pretty-printed IR template for debugging. */
+  dumpIR(): string;
+}
+
+/**
+ * Build a `ComputeShader` from a single compute stage. Plugin-emitted
+ * code calls `__wombat_compute(template, holes, id, avalHoles)` —
+ * mirrors `stage(...)` for the graphics path.
+ */
+export function computeShader(
+  template: Module,
+  holes: HoleGetters = {},
+  id?: string,
+  avalHoles: AvalGetters = {},
+): ComputeShader {
+  const stageId = id ?? hashModule(template);
+  const stage: Stage = { template, holes, avalHoles, id: stageId };
+  const cache = new Map<string, CompiledEffect>();
+  return {
+    stage,
+    id: stageId,
+    dumpIR() {
+      return `// compute stage (id=${stageId})\n${prettyPrint(template)}`;
+    },
+    compile(options) {
+      const sampled: Record<string, HoleValue> = {};
+      for (const [name, getter] of Object.entries(holes)) sampled[name] = getter();
+      const cacheKey = `${stageId}:${hashValue(sampled)}:${options.target}` +
+        (options.skipOptimisations ? ":raw" : "");
+      const cached = cache.get(cacheKey);
+      if (cached) return cached;
+
+      const filled = resolveHoles(template, sampled);
+      const merged: Module = { types: [], values: filled.values };
+      const baseCompiled = compileModule(merged, options);
+      const avalBindings: Record<string, AvalGetter> = {};
+      for (const [name, getter] of Object.entries(avalHoles)) avalBindings[name] = getter;
+      const compiled: CompiledEffect = { ...baseCompiled, avalBindings };
+      cache.set(cacheKey, compiled);
+      return compiled;
+    },
+  };
 }

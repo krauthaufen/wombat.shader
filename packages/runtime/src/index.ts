@@ -28,8 +28,11 @@ export type {
 export type { LayoutInfo, LayoutTarget, FieldLayout } from "./layout.js";
 export { computeLayout } from "./layout.js";
 
-export { stage, effect, vertex, fragment, compute } from "./stage.js";
-export type { Stage, Effect, HoleGetter, HoleGetters } from "./stage.js";
+export { stage, effect, vertex, fragment, compute, computeShader } from "./stage.js";
+export type {
+  Stage, Effect, ComputeShader,
+  HoleGetter, HoleGetters,
+} from "./stage.js";
 
 // Backend-specific subpaths:
 //

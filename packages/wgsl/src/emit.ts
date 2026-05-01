@@ -362,10 +362,13 @@ function emitEntryFunction(ctx: Ctx, e: EntryDef, io: EntryIO): void {
     const b = builtinName(p);
     if (b) params.push(`@builtin(${b}) ${p.name}: ${typeStr(p.type)}`);
   }
-  // Compute stage's `arguments` array carries workgroup-style builtins as well.
+  // Compute stage's `arguments` array carries workgroup-style builtins
+  // as well. The body's `ReadInput("Builtin", semantic)` references the
+  // semantic name (e.g. `global_invocation_id`) — emit the parameter
+  // name as the semantic so signature and body line up.
   for (const p of e.arguments) {
     const b = builtinName(p);
-    if (b) params.push(`@builtin(${b}) ${p.name}: ${typeStr(p.type)}`);
+    if (b) params.push(`@builtin(${b}) ${b}: ${typeStr(p.type)}`);
     else params.push(`${p.name}: ${typeStr(p.type)}`);
   }
 

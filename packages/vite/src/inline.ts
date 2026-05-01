@@ -134,20 +134,21 @@ export function transformInlineShaders(
   }
   const moduleConsts = collectModuleConsts(sf);
 
-  const replacements: Array<{ start: number; end: number; text: string }> = [];
+  const replacements: Array<{ start: number; end: number; text: string; marker: MarkerName }> = [];
 
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)
         && MARKER_NAMES.has(node.expression.text as MarkerName)) {
+      const marker = node.expression.text as MarkerName;
       const text = transformMarkerCall(
         node,
-        node.expression.text as MarkerName,
+        marker,
         sf,
         moduleConsts,
         fileName,
         checker,
       );
-      replacements.push({ start: node.getStart(sf), end: node.getEnd(), text });
+      replacements.push({ start: node.getStart(sf), end: node.getEnd(), text, marker });
       // Don't descend — the body is consumed by the frontend.
       return;
     }
@@ -166,9 +167,15 @@ export function transformInlineShaders(
   for (const r of replacements) {
     ms.overwrite(r.start, r.end, r.text);
   }
-  // Auto-prepend the runtime stage import only if at least one
-  // marker survived (we know it did since replacements is non-empty).
-  ms.prepend(`import { stage as __wombat_stage } from "@aardworx/wombat.shader-runtime";\n`);
+  // Auto-prepend the runtime imports for whichever markers actually
+  // appeared. Compute uses its own factory (`computeShader`) so it
+  // returns a `ComputeShader`, distinct from the graphics-stage `Effect`.
+  const needStage = replacements.some(r => r.marker !== "compute");
+  const needCompute = replacements.some(r => r.marker === "compute");
+  const imports: string[] = [];
+  if (needStage) imports.push("stage as __wombat_stage");
+  if (needCompute) imports.push("computeShader as __wombat_compute");
+  ms.prepend(`import { ${imports.join(", ")} } from "@aardworx/wombat.shader-runtime";\n`);
 
   return {
     code: ms.toString(),
@@ -405,7 +412,8 @@ function transformMarkerCall(
     : `{ ${bindingNames.map((n) => `${n}: () => ${n}`).join(", ")} }`;
   const id = hashModule(module);
   const moduleJson = JSON.stringify(module);
-  return `__wombat_stage(${moduleJson}, ${holesObj}, ${JSON.stringify(id)}, ${avalObj})`;
+  const fn = marker === "compute" ? "__wombat_compute" : "__wombat_stage";
+  return `${fn}(${moduleJson}, ${holesObj}, ${JSON.stringify(id)}, ${avalObj})`;
 }
 
 // ─────────────────────────────────────────────────────────────────────
