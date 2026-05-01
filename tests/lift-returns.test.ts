@@ -1,7 +1,7 @@
 // Tests for the liftReturns pass + the full compile pipeline.
 
 import { describe, expect, it } from "vitest";
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
+import { compileShaderSource } from "@aardworx/wombat.shader";
 
 describe("liftReturns + compile pipeline", () => {
   const source = `

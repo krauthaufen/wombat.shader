@@ -12,7 +12,7 @@ import {
   type Module,
   type Stmt,
   type Var,
-} from "@aardworx/wombat.shader-ir";
+} from "@aardworx/wombat.shader/ir";
 import {
   cse,
   dce,
@@ -20,7 +20,7 @@ import {
   foldExpr,
   inlinePass,
   isPure,
-} from "@aardworx/wombat.shader-passes";
+} from "@aardworx/wombat.shader/passes";
 
 const constI = (n: number): Expr => ({ kind: "Const", value: { kind: "Int", signed: true, value: n }, type: Ti32 });
 const constF = (n: number): Expr => ({ kind: "Const", value: { kind: "Float", value: n }, type: Tf32 });

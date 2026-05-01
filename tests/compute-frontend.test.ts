@@ -5,8 +5,8 @@
 //   - Atomic intrinsics promote the buffer's element type to AtomicU32
 
 import { describe, expect, it } from "vitest";
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
-import type { ValueDef } from "@aardworx/wombat.shader-ir";
+import { compileShaderSource } from "@aardworx/wombat.shader";
+import type { ValueDef } from "@aardworx/wombat.shader/ir";
 
 function storageBuf(name: string, length: number): ValueDef {
   return {

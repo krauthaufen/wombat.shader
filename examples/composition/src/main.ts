@@ -9,8 +9,8 @@
 // fragment functions in the IR. The `after` panel shows the fused
 // result.
 
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
-import { linkEffect } from "@aardworx/wombat.shader-runtime/webgl2";
+import { compileShaderSource } from "@aardworx/wombat.shader";
+import { linkEffect } from "@aardworx/wombat.shader/webgl2";
 
 const log = (id: string, ...args: unknown[]): void => {
   const el = document.getElementById(id);

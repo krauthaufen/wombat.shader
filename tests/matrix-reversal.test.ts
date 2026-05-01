@@ -7,9 +7,9 @@ import { describe, expect, it } from "vitest";
 import {
   reverseMatrixOps,
   type Holes,
-} from "@aardworx/wombat.shader-passes";
-import { compileModule } from "@aardworx/wombat.shader-runtime";
-import type { EntryDef, Expr, Module, Stmt, Type } from "@aardworx/wombat.shader-ir";
+} from "@aardworx/wombat.shader/passes";
+import { compileModule } from "@aardworx/wombat.shader";
+import type { EntryDef, Expr, Module, Stmt, Type } from "@aardworx/wombat.shader/ir";
 
 const Tf32: Type = { kind: "Float", width: 32 };
 const Tvec4f: Type = { kind: "Vector", element: Tf32, dim: 4 };

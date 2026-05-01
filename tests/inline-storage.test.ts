@@ -7,8 +7,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { transformInlineShaders, TypeResolver } from "@aardworx/wombat.shader-vite";
-import { effect, stage } from "@aardworx/wombat.shader-runtime";
-import type { Module } from "@aardworx/wombat.shader-ir";
+import { effect, stage } from "@aardworx/wombat.shader";
+import type { Module } from "@aardworx/wombat.shader/ir";
 
 let workdir: string;
 let resolver: TypeResolver;
@@ -71,7 +71,7 @@ describe("inline storage buffers", () => {
   it("`declare const buf: Storage<i32[]>` becomes a StorageBuffer ValueDef", () => {
     const file = path.join(workdir, "buf.ts");
     const src = `
-      import { compute } from "@aardworx/wombat.shader-runtime";
+      import { compute } from "@aardworx/wombat.shader";
       declare const buf: Storage<i32[]>;
       /** @workgroupSize 64 */
       const cs = compute((b: ComputeBuiltins) => {
@@ -101,7 +101,7 @@ describe("inline storage buffers", () => {
   it("compiles end-to-end into WGSL with `var<storage, read_write>`", () => {
     const file = path.join(workdir, "buf-wgsl.ts");
     const src = `
-      import { compute } from "@aardworx/wombat.shader-runtime";
+      import { compute } from "@aardworx/wombat.shader";
       declare const buf: Storage<u32[]>;
       /** @workgroupSize 64 */
       const cs = compute((b: ComputeBuiltins) => {
@@ -120,7 +120,7 @@ describe("inline storage buffers", () => {
   it("read-only access stays `read` thanks to inferStorageAccess", () => {
     const file = path.join(workdir, "buf-read.ts");
     const src = `
-      import { compute } from "@aardworx/wombat.shader-runtime";
+      import { compute } from "@aardworx/wombat.shader";
       declare const inBuf: Storage<u32[], "read">;
       declare const outBuf: Storage<u32[]>;
       /** @workgroupSize 64 */
@@ -143,7 +143,7 @@ describe("inline storage textures", () => {
   it("`StorageTexture2D<\"rgba8unorm\", \"write\">` lowers to `texture_storage_2d<rgba8unorm, write>` in WGSL", () => {
     const file = path.join(workdir, "tex.ts");
     const src = `
-      import { compute } from "@aardworx/wombat.shader-runtime";
+      import { compute } from "@aardworx/wombat.shader";
       declare const out: StorageTexture2D<"rgba8unorm", "write">;
       /** @workgroupSize 8 8 1 */
       const cs = compute((b: ComputeBuiltins) => {
@@ -168,7 +168,7 @@ describe("inline storage textures", () => {
   it("GLSL target rejects storage textures with a clear error", () => {
     const file = path.join(workdir, "tex-glsl.ts");
     const src = `
-      import { compute } from "@aardworx/wombat.shader-runtime";
+      import { compute } from "@aardworx/wombat.shader";
       declare const out: StorageTexture2D<"rgba8unorm", "write">;
       /** @workgroupSize 8 8 1 */
       const cs = compute((b: ComputeBuiltins) => {

@@ -29,9 +29,9 @@
 
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
-import { compileShaderSource, type CompiledEffect, type CompileOptions } from "@aardworx/wombat.shader-runtime";
-import type { EntryRequest } from "@aardworx/wombat.shader-frontend";
-import type { ValueDef } from "@aardworx/wombat.shader-ir";
+import { compileShaderSource, type CompiledEffect, type CompileOptions } from "@aardworx/wombat.shader";
+import type { EntryRequest } from "@aardworx/wombat.shader/frontend";
+import type { ValueDef } from "@aardworx/wombat.shader/ir";
 import { transformInlineShaders } from "./inline.js";
 import { TypeResolver } from "./typeResolver.js";
 

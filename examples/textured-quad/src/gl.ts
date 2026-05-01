@@ -1,8 +1,8 @@
 // WebGL2 path: compile to GLSL ES 3.00, link, drive uniform updates
 // via the ProgramInterface (no manual `getUniformLocation` round-trips).
 
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
-import { linkEffect } from "@aardworx/wombat.shader-runtime/webgl2";
+import { compileShaderSource } from "@aardworx/wombat.shader";
+import { linkEffect } from "@aardworx/wombat.shader/webgl2";
 import { SOURCE } from "./shaders.js";
 import {
   Tvec2f, Tvec4f, commonValueDefs, log, makeCheckerboard, unitQuad,

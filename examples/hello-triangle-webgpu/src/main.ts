@@ -1,8 +1,8 @@
 // Hello triangle on WebGPU. Same shader source as the WebGL2 example,
 // but compiled to WGSL and submitted through a WebGPU render pipeline.
 
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
-import { createShaderModules } from "@aardworx/wombat.shader-runtime/webgpu";
+import { compileShaderSource } from "@aardworx/wombat.shader";
+import { createShaderModules } from "@aardworx/wombat.shader/webgpu";
 
 const log = (...args: unknown[]): void => {
   console.log(...args);

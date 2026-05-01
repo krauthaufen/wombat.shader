@@ -7,8 +7,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { transformInlineShaders, TypeResolver } from "@aardworx/wombat.shader-vite";
-import { effect, stage } from "@aardworx/wombat.shader-runtime";
-import type { Module } from "@aardworx/wombat.shader-ir";
+import { effect, stage } from "@aardworx/wombat.shader";
+import type { Module } from "@aardworx/wombat.shader/ir";
 
 let workdir: string;
 let resolver: TypeResolver;
@@ -65,7 +65,7 @@ describe("sampler captures", () => {
   it("`Sampler2D` capture emits a Sampler ValueDef, not a constant", () => {
     const file = path.join(workdir, "app.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tex: Sampler2D = ({} as any);  // pretend runtime handle
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: texture(tex, input.v_uv),
@@ -91,7 +91,7 @@ describe("sampler captures", () => {
   it("WGSL emit splits the sampler/texture pair via legaliseTypes", () => {
     const file = path.join(workdir, "wgsl.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tex: Sampler2D = ({} as any);
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: texture(tex, input.v_uv),
@@ -134,7 +134,7 @@ describe("sampler captures", () => {
         ? `new V4f(texture(t, ${uvCtor}), 0.0, 0.0, 1.0)`
         : `texture(t, ${uvCtor})`;
       const src = `
-        import { fragment } from "@aardworx/wombat.shader-runtime";
+        import { fragment } from "@aardworx/wombat.shader";
         const t: ${typeName} = ({} as any);
         const fs = fragment((input: { v_uv: V2f }) => ({
           outColor: ${wrapped},
@@ -155,7 +155,7 @@ describe("sampler captures", () => {
   it("multisampled `Sampler2DMS` emits texture_multisampled_2d in WGSL with no companion sampler", () => {
     const file = path.join(workdir, "ms.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const ms: Sampler2DMS = ({} as any);
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: texelFetch(ms, new V2i(0, 0), 0),
@@ -176,7 +176,7 @@ describe("sampler captures", () => {
   it("GLSL target rejects multisampled samplers with a clear error", () => {
     const file = path.join(workdir, "msfail.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const ms: Sampler2DMS = ({} as any);
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: texelFetch(ms, new V2i(0, 0), 0),
@@ -192,7 +192,7 @@ describe("sampler captures", () => {
   it("GLSL emit uses a combined sampler", () => {
     const file = path.join(workdir, "glsl.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tex: Sampler2D = ({} as any);
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: texture(tex, input.v_uv),

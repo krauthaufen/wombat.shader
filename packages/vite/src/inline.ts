@@ -22,9 +22,9 @@
 
 import ts from "typescript";
 import MagicString from "magic-string";
-import type { EntryRequest } from "@aardworx/wombat.shader-frontend";
-import { parseShader, tryResolveTypeName } from "@aardworx/wombat.shader-frontend";
-import { liftReturns } from "@aardworx/wombat.shader-passes";
+import type { EntryRequest } from "@aardworx/wombat.shader/frontend";
+import { parseShader, tryResolveTypeName } from "@aardworx/wombat.shader/frontend";
+import { liftReturns } from "@aardworx/wombat.shader/passes";
 import {
   hashModule,
   type EntryDef,
@@ -37,7 +37,7 @@ import {
   type Type,
   type UniformDecl,
   type ValueDef,
-} from "@aardworx/wombat.shader-ir";
+} from "@aardworx/wombat.shader/ir";
 import { TypeResolver } from "./typeResolver.js";
 import {
   isAmbientDeclaration, isAvalType,
@@ -175,7 +175,7 @@ export function transformInlineShaders(
   const imports: string[] = [];
   if (needStage) imports.push("stage as __wombat_stage");
   if (needCompute) imports.push("computeShader as __wombat_compute");
-  ms.prepend(`import { ${imports.join(", ")} } from "@aardworx/wombat.shader-runtime";\n`);
+  ms.prepend(`import { ${imports.join(", ")} } from "@aardworx/wombat.shader";\n`);
 
   return {
     code: ms.toString(),
@@ -1120,8 +1120,7 @@ function findTopLevelFunction(
 }
 
 function sourceImportsRuntime(source: string): boolean {
-  return /from\s+["']@aardworx\/wombat\.shader-runtime["']/.test(source)
-      || /from\s+["']@aardworx\/wombat\.shader["']/.test(source);
+  return /from\s+["']@aardworx\/wombat\.shader["']/.test(source);
 }
 
 

@@ -11,8 +11,8 @@ import {
   Tvoid,
   Vec,
   type Type,
-} from "@aardworx/wombat.shader-ir";
-import { compileModule, compileShaderSource, computeLayout } from "@aardworx/wombat.shader-runtime";
+} from "@aardworx/wombat.shader/ir";
+import { compileModule, compileShaderSource, computeLayout } from "@aardworx/wombat.shader";
 
 const Tvec2f: Type = Vec(Tf32, 2);
 const Tvec3f: Type = Vec(Tf32, 3);

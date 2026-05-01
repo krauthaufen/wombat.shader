@@ -16,9 +16,9 @@ import {
   type Stmt,
   type Type,
   type Var,
-} from "@aardworx/wombat.shader-ir";
-import { emitGlsl } from "@aardworx/wombat.shader-glsl";
-import { emitWgsl } from "@aardworx/wombat.shader-wgsl";
+} from "@aardworx/wombat.shader/ir";
+import { emitGlsl } from "@aardworx/wombat.shader/glsl";
+import { emitWgsl } from "@aardworx/wombat.shader/wgsl";
 
 const Tvec3f: Type = Vec(Tf32, 3);
 const Tvec4f: Type = Vec(Tf32, 4);
@@ -284,7 +284,9 @@ describe("compute stage", () => {
     const mod: Module = { types: [], values: [{ kind: "Entry", entry }] };
     const wgsl = emitWgsl(mod).source;
     expect(wgsl).toContain("@compute @workgroup_size(8, 8, 1)");
-    expect(wgsl).toContain("@builtin(global_invocation_id) gid: vec3<u32>");
+    // The emitter aligns the parameter identifier with the builtin
+    // semantic so body references (`global_invocation_id.x`) resolve.
+    expect(wgsl).toContain("@builtin(global_invocation_id) global_invocation_id: vec3<u32>");
     expect(emitWgsl(mod).meta.workgroupSize).toEqual([8, 8, 1]);
   });
 });

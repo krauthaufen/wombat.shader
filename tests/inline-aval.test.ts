@@ -7,8 +7,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { transformInlineShaders, TypeResolver } from "@aardworx/wombat.shader-vite";
-import { effect, stage } from "@aardworx/wombat.shader-runtime";
-import type { Module } from "@aardworx/wombat.shader-ir";
+import { effect, stage } from "@aardworx/wombat.shader";
+import type { Module } from "@aardworx/wombat.shader/ir";
 
 let workdir: string;
 let resolver: TypeResolver;
@@ -53,7 +53,7 @@ describe("aval-typed captures → uniforms", () => {
   it("`const tint: aval<V3f>` capture becomes a Uniform decl", () => {
     const file = path.join(workdir, "app.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tint: aval<V3f> = aval(new V3f(1, 0, 0));
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(tint.x, tint.y, tint.z, 1.0),
@@ -83,7 +83,7 @@ describe("aval-typed captures → uniforms", () => {
   it("plain V3f next to aval<V3f> — only the plain one specializes", () => {
     const file = path.join(workdir, "mixed.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const fixedTint: V3f = new V3f(0.5, 0.5, 0.5);
       const animTint: aval<V3f> = aval(new V3f(1, 0, 0));
       const fs = fragment((input: { v_uv: V2f }) => ({
@@ -108,7 +108,7 @@ describe("aval-typed captures → uniforms", () => {
   it("Effect.compile() exposes avalBindings on the CompiledEffect", () => {
     const file = path.join(workdir, "compiled.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tint: aval<V3f> = aval(new V3f(1, 0, 0));
       const fs = fragment(() => ({
         outColor: new V4f(tint.x, tint.y, tint.z, 1.0),

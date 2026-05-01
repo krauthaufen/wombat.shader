@@ -5,9 +5,9 @@
 // buffer becomes `read_write` automatically because the source assigns
 // to it.
 
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
-import { createShaderModules } from "@aardworx/wombat.shader-runtime/webgpu";
-import type { ValueDef } from "@aardworx/wombat.shader-ir";
+import { compileShaderSource } from "@aardworx/wombat.shader";
+import { createShaderModules } from "@aardworx/wombat.shader/webgpu";
+import type { ValueDef } from "@aardworx/wombat.shader/ir";
 
 const log = (...args: unknown[]): void => {
   const el = document.getElementById("log")!;
@@ -19,7 +19,7 @@ const SIZE = 64;
 const MAX_ITER = 64;
 
 const SHADER_SRC = `
-import type { ComputeBuiltins } from "@aardworx/wombat.shader-types";
+import type { ComputeBuiltins } from "@aardworx/wombat.shader/types";
 
 declare const out_buffer: number[];
 

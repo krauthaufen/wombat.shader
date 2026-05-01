@@ -16,9 +16,9 @@ import {
   type Stmt,
   type Type,
   type Var,
-} from "@aardworx/wombat.shader-ir";
-import { emitGlsl } from "@aardworx/wombat.shader-glsl";
-import { emitWgsl } from "@aardworx/wombat.shader-wgsl";
+} from "@aardworx/wombat.shader/ir";
+import { emitGlsl } from "@aardworx/wombat.shader/glsl";
+import { emitWgsl } from "@aardworx/wombat.shader/wgsl";
 
 const Tvec3f: Type = Vec(Tf32, 3);
 const Tvec4f: Type = Vec(Tf32, 4);
@@ -30,23 +30,23 @@ function variable(name: string, type: Type, mutable = false): Var {
   return { name, type, mutable };
 }
 
-function readInput(name: string, type: Type): import("@aardworx/wombat.shader-ir").Expr {
+function readInput(name: string, type: Type): import("@aardworx/wombat.shader/ir").Expr {
   return { kind: "ReadInput", scope: "Input", name, type };
 }
 
-function readUniform(name: string, type: Type): import("@aardworx/wombat.shader-ir").Expr {
+function readUniform(name: string, type: Type): import("@aardworx/wombat.shader/ir").Expr {
   return { kind: "ReadInput", scope: "Uniform", name, type };
 }
 
-function v(va: Var): import("@aardworx/wombat.shader-ir").Expr {
+function v(va: Var): import("@aardworx/wombat.shader/ir").Expr {
   return { kind: "Var", var: va, type: va.type };
 }
 
-function newVec(type: Type, components: import("@aardworx/wombat.shader-ir").Expr[]): import("@aardworx/wombat.shader-ir").Expr {
+function newVec(type: Type, components: import("@aardworx/wombat.shader/ir").Expr[]): import("@aardworx/wombat.shader/ir").Expr {
   return { kind: "NewVector", components, type };
 }
 
-function constF(value: number): import("@aardworx/wombat.shader-ir").Expr {
+function constF(value: number): import("@aardworx/wombat.shader/ir").Expr {
   return { kind: "Const", value: { kind: "Float", value }, type: Tf32 };
 }
 

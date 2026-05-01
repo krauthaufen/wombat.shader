@@ -4,8 +4,8 @@
 // to each `CompiledStage`.
 
 import { describe, expect, it } from "vitest";
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
-import type { Type } from "@aardworx/wombat.shader-ir";
+import { compileShaderSource } from "@aardworx/wombat.shader";
+import type { Type } from "@aardworx/wombat.shader/ir";
 
 const Tvec4f: Type = { kind: "Vector", element: { kind: "Float", width: 32 }, dim: 4 };
 const Tvec2f: Type = { kind: "Vector", element: { kind: "Float", width: 32 }, dim: 2 };
@@ -75,8 +75,8 @@ describe("emitter source maps", () => {
   // Sanity check on the type-level wiring: lineSpans aren't accidentally
   // serialised into the IR JSON via stableStringify (would change hashes).
   it("Stmt.span is excluded from the build-time module hash", async () => {
-    const { hashModule } = await import("@aardworx/wombat.shader-ir");
-    const { parseShader } = await import("@aardworx/wombat.shader-frontend");
+    const { hashModule } = await import("@aardworx/wombat.shader/ir");
+    const { parseShader } = await import("@aardworx/wombat.shader/frontend");
     const m1 = parseShader({
       source: `function f(input: { v_uv: V2f }): V4f { return new V4f(input.v_uv.x, 0, 0, 1); }`,
       file: "/file-A.ts",

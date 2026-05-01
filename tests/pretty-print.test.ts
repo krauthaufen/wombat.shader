@@ -1,8 +1,8 @@
 // Pretty-printer + Effect.dumpIR() — human-readable IR for debugging.
 
 import { describe, expect, it } from "vitest";
-import { prettyPrint, type EntryDef, type Module, type Stmt, type Type } from "@aardworx/wombat.shader-ir";
-import { effect, stage } from "@aardworx/wombat.shader-runtime";
+import { prettyPrint, type EntryDef, type Module, type Stmt, type Type } from "@aardworx/wombat.shader/ir";
+import { effect, stage } from "@aardworx/wombat.shader";
 
 const Tf32: Type = { kind: "Float", width: 32 };
 const Tvec2f: Type = { kind: "Vector", element: Tf32, dim: 2 };

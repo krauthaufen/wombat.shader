@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { transformInlineShaders, TypeResolver } from "@aardworx/wombat.shader-vite";
-import type { Module } from "@aardworx/wombat.shader-ir";
+import type { Module } from "@aardworx/wombat.shader/ir";
 
 let workdir: string;
 let resolver: TypeResolver;
@@ -58,7 +58,7 @@ describe("cross-file helper resolution", () => {
   it("named import from another file is discovered and emitted", () => {
     const file = path.join(workdir, "app.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       import { blendColors } from "./shaders-utils.js";
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(blendColors(new V3f(1, 0, 0), new V3f(0, 0, 1), input.v_uv.x).x, 0.5, 0.5, 1),
@@ -79,7 +79,7 @@ describe("cross-file helper resolution", () => {
   it("imported `const fn = (…) => …` arrow helper also resolves cross-file", () => {
     const file = path.join(workdir, "app2.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       import { luminance } from "./shaders-utils.js";
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(luminance(new V3f(input.v_uv.x, input.v_uv.y, 0.5)), 0, 0, 1),
@@ -107,7 +107,7 @@ describe("cross-file helper resolution", () => {
     `);
     const file = path.join(workdir, "app3.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       import { softTint } from "./color-utils.js";
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(softTint(new V3f(input.v_uv.x, input.v_uv.y, 0.5)).x, 0, 0, 1),

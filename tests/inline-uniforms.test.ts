@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { transformInlineShaders, TypeResolver } from "@aardworx/wombat.shader-vite";
-import type { Module } from "@aardworx/wombat.shader-ir";
+import type { Module } from "@aardworx/wombat.shader/ir";
 
 let workdir: string;
 let resolver: TypeResolver;
@@ -62,7 +62,7 @@ describe("inline shader: ambient uniforms via TS type checker", () => {
   it("recognises `declare const u: { … }` in the same file", () => {
     const file = path.join(workdir, "app.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       declare const u: { readonly tint: V3f; readonly time: number };
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(u.tint.x, u.tint.y, u.tint.z, u.time),
@@ -91,7 +91,7 @@ describe("inline shader: ambient uniforms via TS type checker", () => {
   it("recognises a loose `declare const time: number` ambient uniform", () => {
     const file = path.join(workdir, "loose.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       declare const time: number;
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(time, time, time, 1.0),
@@ -119,7 +119,7 @@ describe("inline shader: ambient uniforms via TS type checker", () => {
     const r2 = new TypeResolver({ rootDir: workdir });
     const file = path.join(workdir, "consumer.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(u.tint.x, u.tint.y, u.tint.z, 1.0),
       }));
@@ -140,7 +140,7 @@ describe("inline shader: ambient uniforms via TS type checker", () => {
   it("non-ambient `const tint: V3f` is still a closure capture", () => {
     const file = path.join(workdir, "closure.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tint: V3f = new V3f(0.5, 0.5, 0.5);
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(tint.x, tint.y, tint.z, 1.0),

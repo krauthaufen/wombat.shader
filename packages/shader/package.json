@@ -1,0 +1,58 @@
+{
+  "name": "@aardworx/wombat.shader",
+  "version": "0.2.0",
+  "description": "wombat.shader: TypeScript shader source → WGSL/GLSL with optimisation passes, named-binding ProgramInterface, and runtime Effect/ComputeShader composition.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./ir": {
+      "types": "./dist/ir/index.d.ts",
+      "import": "./dist/ir/index.js"
+    },
+    "./frontend": {
+      "types": "./dist/frontend/index.d.ts",
+      "import": "./dist/frontend/index.js"
+    },
+    "./passes": {
+      "types": "./dist/passes/index.d.ts",
+      "import": "./dist/passes/index.js"
+    },
+    "./glsl": {
+      "types": "./dist/glsl/index.d.ts",
+      "import": "./dist/glsl/index.js"
+    },
+    "./wgsl": {
+      "types": "./dist/wgsl/index.d.ts",
+      "import": "./dist/wgsl/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/types/index.js"
+    },
+    "./webgl2": {
+      "types": "./dist/runtime/webgl2/index.d.ts",
+      "import": "./dist/runtime/webgl2/index.js"
+    },
+    "./webgpu": {
+      "types": "./dist/runtime/webgpu/index.d.ts",
+      "import": "./dist/runtime/webgpu/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@aardworx/wombat.base": "^0.3.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

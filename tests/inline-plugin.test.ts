@@ -23,7 +23,7 @@ describe("transformInlineShaders", () => {
 
   it("rewrites a fragment marker call with no captures", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(input.v_uv.x, input.v_uv.y, 0.5, 1.0),
       }));
@@ -40,7 +40,7 @@ describe("transformInlineShaders", () => {
 
   it("rewrites a fragment marker call with a closure capture", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tint: V3f = new V3f(0.5, 0.6, 0.7);
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(input.v_uv.x, input.v_uv.y, tint.x, 1.0),
@@ -57,7 +57,7 @@ describe("transformInlineShaders", () => {
 
   it("infers the closure type from a `new V3f(...)` initializer", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tint = new V3f(1, 0, 0);
       const fs = fragment(() => ({
         outColor: new V4f(tint.x, tint.y, tint.z, 1.0),
@@ -72,7 +72,7 @@ describe("transformInlineShaders", () => {
 
   it("errors clearly on a closure capture with no resolvable type", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tint = whatever;
       const fs = fragment(() => ({ outColor: new V4f(tint, tint, tint, 1.0) }));
     `;
@@ -82,7 +82,7 @@ describe("transformInlineShaders", () => {
 
   it("accepts a top-level function declaration by name", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       function fsMain(input: { v_uv: V2f }): { outColor: V4f } {
         return { outColor: new V4f(input.v_uv.x, input.v_uv.y, 0.5, 1.0) };
       }
@@ -99,7 +99,7 @@ describe("transformInlineShaders", () => {
 
   it("accepts a top-level `const fn = (...) => ...` by name", () => {
     const src = `
-      import { vertex } from "@aardworx/wombat.shader-runtime";
+      import { vertex } from "@aardworx/wombat.shader";
       const vsMain = (v: { a_position: V3f }) => ({
         gl_Position: new V4f(v.a_position.x, v.a_position.y, v.a_position.z, 1.0),
       });
@@ -113,7 +113,7 @@ describe("transformInlineShaders", () => {
 
   it("errors clearly if the named function isn't found in this file", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const fs = fragment(missingFn);
     `;
     expect(() => transformInlineShaders(src, "/x/app.ts"))
@@ -122,7 +122,7 @@ describe("transformInlineShaders", () => {
 
   it("ignores intrinsic / shipped-type identifiers (not captures)", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(sin(input.v_uv.x), 0.0, 0.0, 1.0),
       }));

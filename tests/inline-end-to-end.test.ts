@@ -4,8 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 import { transformInlineShaders } from "@aardworx/wombat.shader-vite";
-import { effect, stage } from "@aardworx/wombat.shader-runtime";
-import type { Module } from "@aardworx/wombat.shader-ir";
+import { effect, stage } from "@aardworx/wombat.shader";
+import type { Module } from "@aardworx/wombat.shader/ir";
 
 /** Pull the JSON template out of a `__wombat_stage(<template>, ...)` call site. */
 function extractTemplate(code: string): Module {
@@ -29,7 +29,7 @@ function extractTemplate(code: string): Module {
 describe("inline shader: end-to-end via Stage runtime", () => {
   it("fragment with V3f closure capture compiles to WGSL with hole values inlined", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tint: V3f = new V3f(0.25, 0.5, 0.75);
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(tint.x, tint.y, tint.z, 1.0),
@@ -53,7 +53,7 @@ describe("inline shader: end-to-end via Stage runtime", () => {
 
   it("re-sampling the getter on each compile picks up new values", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const tint: V3f = new V3f(1, 0, 0);
       const fs = fragment(() => ({
         outColor: new V4f(tint.x, tint.y, tint.z, 1.0),

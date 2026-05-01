@@ -11,12 +11,12 @@ import {
   type Stmt,
   type Type,
   type Var,
-} from "@aardworx/wombat.shader-ir";
+} from "@aardworx/wombat.shader/ir";
 import {
   composeStages,
   pruneCrossStage,
   reduceUniforms,
-} from "@aardworx/wombat.shader-passes";
+} from "@aardworx/wombat.shader/passes";
 
 const Tvec3f: Type = Vec(Tf32, 3);
 const Tvec4f: Type = Vec(Tf32, 4);
@@ -309,10 +309,10 @@ describe("integration: composeStages → pruneCrossStage → reduceUniforms", ()
       name: "tmp", type: Tvec3f, semantic: "Color",
       decorations: [{ kind: "Location", value: 0 }],
     };
-    const u_dead: import("@aardworx/wombat.shader-ir").UniformDecl = {
+    const u_dead: import("@aardworx/wombat.shader/ir").UniformDecl = {
       name: "u_dead", type: Tf32,
     };
-    const u_live: import("@aardworx/wombat.shader-ir").UniformDecl = {
+    const u_live: import("@aardworx/wombat.shader/ir").UniformDecl = {
       name: "u_live", type: Tf32,
     };
     const fragA: EntryDef = {

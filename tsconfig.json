@@ -1,13 +1,7 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/ir" },
-    { "path": "./packages/glsl" },
-    { "path": "./packages/wgsl" },
-    { "path": "./packages/passes" },
-    { "path": "./packages/types" },
-    { "path": "./packages/frontend" },
-    { "path": "./packages/runtime" },
+    { "path": "./packages/shader" },
     { "path": "./packages/vite" }
   ]
 }

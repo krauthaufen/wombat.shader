@@ -1,8 +1,8 @@
 // WebGPU path: compile to WGSL, build a render pipeline + bind group
 // driven entirely by the ProgramInterface.
 
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
-import { createShaderModules } from "@aardworx/wombat.shader-runtime/webgpu";
+import { compileShaderSource } from "@aardworx/wombat.shader";
+import { createShaderModules } from "@aardworx/wombat.shader/webgpu";
 import { SOURCE } from "./shaders.js";
 import {
   Tvec2f, Tvec4f, commonValueDefs, log, makeCheckerboard, unitQuad,

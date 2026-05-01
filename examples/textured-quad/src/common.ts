@@ -6,7 +6,7 @@
 // we need — attribute formats, uniform-block layouts (with field
 // offsets), sampler / texture bindings.
 
-import type { Module, Type, ValueDef } from "@aardworx/wombat.shader-ir";
+import type { Module, Type, ValueDef } from "@aardworx/wombat.shader/ir";
 
 export const Tf32: Type = { kind: "Float", width: 32 };
 export const Tvec2f: Type = { kind: "Vector", element: Tf32, dim: 2 };

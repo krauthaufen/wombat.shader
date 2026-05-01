@@ -14,9 +14,9 @@ import {
   type Stmt,
   type Type,
   type Var,
-} from "@aardworx/wombat.shader-ir";
-import { emitGlsl } from "@aardworx/wombat.shader-glsl";
-import { emitWgsl } from "@aardworx/wombat.shader-wgsl";
+} from "@aardworx/wombat.shader/ir";
+import { emitGlsl } from "@aardworx/wombat.shader/glsl";
+import { emitWgsl } from "@aardworx/wombat.shader/wgsl";
 
 const Tvec3f: Type = Vec(Tf32, 3);
 const Tvec4f: Type = Vec(Tf32, 4);

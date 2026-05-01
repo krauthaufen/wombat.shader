@@ -4,8 +4,8 @@
 // resolves to the right IR type in shader code.
 
 import { describe, expect, it } from "vitest";
-import { V3f, V4f, M44f } from "@aardworx/wombat.shader-types";
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
+import { V3f, V4f, M44f } from "@aardworx/wombat.shader/types";
+import { compileShaderSource } from "@aardworx/wombat.shader";
 
 describe("wombat.base reuse", () => {
   it("V3f / V4f / M44f are real runtime classes", () => {

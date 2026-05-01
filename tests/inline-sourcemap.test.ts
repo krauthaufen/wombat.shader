@@ -7,7 +7,7 @@ import { transformInlineShaders } from "@aardworx/wombat.shader-vite";
 describe("inline plugin source map", () => {
   it("transforms produce a v3 source map when at least one marker is rewritten", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(input.v_uv.x, input.v_uv.y, 0.5, 1.0),
       }));

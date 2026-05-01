@@ -5,8 +5,8 @@
 // build-time vite plugin so the browser only sees emitted GLSL/WGSL.
 // We do it inline here to keep the example self-contained.
 
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
-import { linkEffect } from "@aardworx/wombat.shader-runtime/webgl2";
+import { compileShaderSource } from "@aardworx/wombat.shader";
+import { linkEffect } from "@aardworx/wombat.shader/webgl2";
 
 const log = (...args: unknown[]): void => {
   console.log(...args);

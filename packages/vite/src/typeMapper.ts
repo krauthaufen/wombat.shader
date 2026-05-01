@@ -13,8 +13,8 @@ import type {
   StorageAccess,
   StorageTextureFormat,
   Type as IRType,
-} from "@aardworx/wombat.shader-ir";
-import { tryResolveTypeName } from "@aardworx/wombat.shader-frontend";
+} from "@aardworx/wombat.shader/ir";
+import { tryResolveTypeName } from "@aardworx/wombat.shader/frontend";
 
 export function tsTypeToIR(t: ts.Type, checker: ts.TypeChecker): IRType | undefined {
   // Adaptive `aval<T>` — unwrap to its inner IR type. Detection is by

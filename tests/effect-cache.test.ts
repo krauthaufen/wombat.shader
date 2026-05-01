@@ -3,8 +3,8 @@
 // the same `CompiledEffect` reference (i.e. no re-emit).
 
 import { describe, expect, it } from "vitest";
-import { effect, stage } from "@aardworx/wombat.shader-runtime";
-import type { EntryDef, Module, Stmt, Type } from "@aardworx/wombat.shader-ir";
+import { effect, stage } from "@aardworx/wombat.shader";
+import type { EntryDef, Module, Stmt, Type } from "@aardworx/wombat.shader/ir";
 
 const Tf32: Type = { kind: "Float", width: 32 };
 const Tvec3f: Type = { kind: "Vector", element: Tf32, dim: 3 };

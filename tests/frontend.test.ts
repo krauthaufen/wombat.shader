@@ -2,9 +2,9 @@
 // → GLSL / WGSL emit.
 
 import { describe, expect, it } from "vitest";
-import { parseShader } from "@aardworx/wombat.shader-frontend";
-import { emitGlsl } from "@aardworx/wombat.shader-glsl";
-import { emitWgsl } from "@aardworx/wombat.shader-wgsl";
+import { parseShader } from "@aardworx/wombat.shader/frontend";
+import { emitGlsl } from "@aardworx/wombat.shader/glsl";
+import { emitWgsl } from "@aardworx/wombat.shader/wgsl";
 
 describe("frontend — minimal fragment shader", () => {
   it("translates a simple fragment to IR + emits GLSL", () => {

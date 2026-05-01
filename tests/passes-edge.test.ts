@@ -13,8 +13,8 @@ import {
   type Stmt,
   type Type,
   type Var,
-} from "@aardworx/wombat.shader-ir";
-import { cse, dce, foldExpr, hasSideEffects, inlinePass, isPure } from "@aardworx/wombat.shader-passes";
+} from "@aardworx/wombat.shader/ir";
+import { cse, dce, foldExpr, hasSideEffects, inlinePass, isPure } from "@aardworx/wombat.shader/passes";
 
 const Tvec3f: Type = Vec(Tf32, 3);
 

@@ -4,7 +4,7 @@
 // in shader bodies.
 
 import { describe, expect, it } from "vitest";
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
+import { compileShaderSource } from "@aardworx/wombat.shader";
 
 function compileFragment(source: string): { glsl: string; wgsl: string } {
   const out = ["glsl", "wgsl"].map((target) =>

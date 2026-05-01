@@ -3,8 +3,8 @@
 // bit ops (countOneBits, extractBits, reverseBits, firstLeadingBit).
 
 import { describe, expect, it } from "vitest";
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
-import type { ValueDef } from "@aardworx/wombat.shader-ir";
+import { compileShaderSource } from "@aardworx/wombat.shader";
+import type { ValueDef } from "@aardworx/wombat.shader/ir";
 
 function compileBoth(source: string): { glsl: string; wgsl: string } {
   const glsl = compileShaderSource(source, [{ name: "fsMain", stage: "fragment", outputs: [{

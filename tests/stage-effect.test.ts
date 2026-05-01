@@ -1,8 +1,8 @@
 // Stage / Effect — closure-hole-driven compile path.
 
 import { describe, expect, it } from "vitest";
-import type { EntryDef, Module, Stmt, Type } from "@aardworx/wombat.shader-ir";
-import { effect, stage } from "@aardworx/wombat.shader-runtime";
+import type { EntryDef, Module, Stmt, Type } from "@aardworx/wombat.shader/ir";
+import { effect, stage } from "@aardworx/wombat.shader";
 
 const Tf32: Type = { kind: "Float", width: 32 };
 const Tvec2f: Type = { kind: "Vector", element: Tf32, dim: 2 };

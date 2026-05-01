@@ -9,8 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@aardworx/wombat.shader-runtime": "*",
-    "@aardworx/wombat.shader-types": "*"
+    "@aardworx/wombat.shader": "*"
   },
   "devDependencies": {
     "vite": "^5.0.0"

@@ -8,7 +8,7 @@ import {
   vec3, vec4,
   Sampler2D,
   texture, sin, mix, normalize, dot,
-} from "@aardworx/wombat.shader-types";
+} from "@aardworx/wombat.shader/types";
 
 describe("shader-types — type-only smoke", () => {
   it("user code referencing the declared classes type-checks", () => {

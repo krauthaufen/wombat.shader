@@ -8,7 +8,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@aardworx/wombat.shader-runtime": "*"
+    "@aardworx/wombat.shader": "*"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.69",

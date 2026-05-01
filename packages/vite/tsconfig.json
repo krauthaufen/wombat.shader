@@ -6,9 +6,6 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../ir" },
-    { "path": "../frontend" },
-    { "path": "../passes" },
-    { "path": "../runtime" }
+    { "path": "../shader" }
   ]
 }

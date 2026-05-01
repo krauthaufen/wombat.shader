@@ -3,8 +3,8 @@
 
 import { describe, expect, it } from "vitest";
 import { transformInlineShaders } from "@aardworx/wombat.shader-vite";
-import { effect, stage } from "@aardworx/wombat.shader-runtime";
-import type { Module } from "@aardworx/wombat.shader-ir";
+import { effect, stage } from "@aardworx/wombat.shader";
+import type { Module } from "@aardworx/wombat.shader/ir";
 
 function extractTemplate(code: string): Module {
   const idx = code.indexOf("__wombat_stage(");
@@ -21,7 +21,7 @@ function extractTemplate(code: string): Module {
 describe("inline shader: helper functions", () => {
   it("translates a same-file helper called from a fragment body", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       function half(x: number): number { return x * 0.5; }
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(half(input.v_uv.x), half(input.v_uv.y), 0.5, 1.0),
@@ -44,7 +44,7 @@ describe("inline shader: helper functions", () => {
 
   it("transitively discovers helpers (helper calls another helper)", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       function half(x: number): number { return x * 0.5; }
       function quart(x: number): number { return half(half(x)); }
       const fs = fragment((input: { v_uv: V2f }) => ({
@@ -62,7 +62,7 @@ describe("inline shader: helper functions", () => {
 
   it("helper compiles end-to-end into WGSL with the helper function emitted", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       function half(x: number): number { return x * 0.5; }
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(half(input.v_uv.x), half(input.v_uv.y), 0.5, 1.0),
@@ -78,7 +78,7 @@ describe("inline shader: helper functions", () => {
 
   it("`const fn = (…) => …` arrow helper works the same way", () => {
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       const half = (x: number): number => x * 0.5;
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(half(input.v_uv.x), 0.5, 0.5, 1.0),

@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { transformInlineShaders, TypeResolver } from "@aardworx/wombat.shader-vite";
-import type { Module } from "@aardworx/wombat.shader-ir";
+import type { Module } from "@aardworx/wombat.shader/ir";
 
 let workdir: string;
 let resolver: TypeResolver;
@@ -53,7 +53,7 @@ describe("scalar aliases", () => {
   it("ambient `declare const x: i32` becomes a Uniform of i32", () => {
     const file = path.join(workdir, "i32.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       declare const frame: i32;
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(input.v_uv.x, input.v_uv.y, 0.5, 1.0),
@@ -78,7 +78,7 @@ describe("scalar aliases", () => {
   it("ambient `declare const x: u32` becomes a Uniform of u32", () => {
     const file = path.join(workdir, "u32.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       declare const flags: u32;
       const fs = fragment((input: { v_uv: V2f }) => ({
         outColor: new V4f(flags as f32, 0, 0, 1.0),
@@ -99,7 +99,7 @@ describe("scalar aliases", () => {
   it("plain `number` still defaults to f32 (existing behavior preserved)", () => {
     const file = path.join(workdir, "num.ts");
     const src = `
-      import { fragment } from "@aardworx/wombat.shader-runtime";
+      import { fragment } from "@aardworx/wombat.shader";
       declare const time: number;
       const fs = fragment(() => ({ outColor: new V4f(time, time, time, 1.0) }));
     `;

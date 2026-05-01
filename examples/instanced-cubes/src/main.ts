@@ -10,8 +10,8 @@
 //   - depth testing
 //   - real perspective + orbit camera
 
-import { compileShaderSource } from "@aardworx/wombat.shader-runtime";
-import { createShaderModules } from "@aardworx/wombat.shader-runtime/webgpu";
+import { compileShaderSource } from "@aardworx/wombat.shader";
+import { createShaderModules } from "@aardworx/wombat.shader/webgpu";
 
 const log = (...args: unknown[]): void => {
   const el = document.getElementById("log")!;

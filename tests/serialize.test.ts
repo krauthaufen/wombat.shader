@@ -11,7 +11,7 @@ import {
   type IntrinsicRef,
   type IntrinsicRegistry,
   type Module,
-} from "@aardworx/wombat.shader-ir";
+} from "@aardworx/wombat.shader/ir";
 
 const Tvec3f = Vec(Tf32, 3);
 const Tvec4f = Vec(Tf32, 4);
@@ -134,7 +134,7 @@ describe("IR JSON round-trip", () => {
         kind: "Constant" as const,
         varType: Tf32,
         name: "BAD",
-        init: { kind: "Expr" as const, value: ({ getThing: () => 0 } as unknown as import("@aardworx/wombat.shader-ir").Expr) },
+        init: { kind: "Expr" as const, value: ({ getThing: () => 0 } as unknown as import("@aardworx/wombat.shader/ir").Expr) },
       }],
     };
     expect(() => serialise(m as unknown as Module)).toThrow();

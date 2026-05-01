@@ -10,10 +10,10 @@ import {
   type Expr,
   type Module,
   type Stmt,
-} from "@aardworx/wombat.shader-ir";
-import { legaliseTypes } from "@aardworx/wombat.shader-passes";
-import { emitGlsl } from "@aardworx/wombat.shader-glsl";
-import { emitWgsl } from "@aardworx/wombat.shader-wgsl";
+} from "@aardworx/wombat.shader/ir";
+import { legaliseTypes } from "@aardworx/wombat.shader/passes";
+import { emitGlsl } from "@aardworx/wombat.shader/glsl";
+import { emitWgsl } from "@aardworx/wombat.shader/wgsl";
 
 const Tvec3f = Vec(Tf32, 3);
 const Tvec4f = Vec(Tf32, 4);
