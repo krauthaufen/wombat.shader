@@ -34,6 +34,13 @@ export type {
   HoleGetter, HoleGetters,
 } from "./stage.js";
 
+// Per-output dependency analysis — used by downstream layers
+// (e.g. wombat.dom's pick `chooseChain`) to ask "can this effect
+// produce semantic X given that the geometry only exposes
+// attributes Y?". Lives in passes but exposed at runtime so
+// callers can avoid the `/passes` subpath.
+export { effectDependencies, type OutputDep } from "../passes/effectDeps.js";
+
 // Backend-specific subpaths:
 //
 //   import { linkEffect } from "@aardworx/wombat.shader-runtime/webgl2";
