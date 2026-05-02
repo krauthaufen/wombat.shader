@@ -116,8 +116,11 @@ export function transformInlineShaders(
   fileName: string,
   resolver?: TypeResolver,
 ): TransformResult | null {
-  // Cheap reject — most files don't contain shader markers.
-  if (!/\b(vertex|fragment|compute)\s*\(/.test(source)) return null;
+  // Cheap reject — most files don't contain shader markers. The
+  // optional `<…>` group is for the type-parametrised form
+  // `vertex<I, O>(arrow)` which TS doesn't strip until compilation;
+  // without it the plugin would skip generic-typed marker calls.
+  if (!/\b(vertex|fragment|compute)\s*(?:<[^()]*>)?\s*\(/.test(source)) return null;
   if (!sourceImportsRuntime(source)) return null;
 
   // Update the resolver's in-memory copy so the type checker sees the
