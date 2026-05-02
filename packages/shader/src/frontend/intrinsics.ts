@@ -140,9 +140,19 @@ export const INTRINSICS: Record<string, IntrinsicRef> = {
 
   // derivatives (fragment-only). GLSL spells them `dFdx`/`dFdy`,
   // WGSL spells them `dpdx`/`dpdy`; `fwidth` is the same in both.
-  dFdx: makePureWithEmit("dFdx", { glsl: "dFdx", wgsl: "dpdx" }, elementWise),
-  dFdy: makePureWithEmit("dFdy", { glsl: "dFdy", wgsl: "dpdy" }, elementWise),
-  fwidth: makePure("fwidth", elementWise),
+  // WGSL also exposes explicit fine/coarse variants — WebKit's
+  // Metal backend handles the explicit forms more reliably than
+  // the implementation-defined plain dpdx/dpdy, so we expose all
+  // three.
+  dFdx:       makePureWithEmit("dFdx",       { glsl: "dFdx",       wgsl: "dpdx" },       elementWise),
+  dFdy:       makePureWithEmit("dFdy",       { glsl: "dFdy",       wgsl: "dpdy" },       elementWise),
+  dFdxFine:   makePureWithEmit("dFdxFine",   { glsl: "dFdxFine",   wgsl: "dpdxFine" },   elementWise),
+  dFdyFine:   makePureWithEmit("dFdyFine",   { glsl: "dFdyFine",   wgsl: "dpdyFine" },   elementWise),
+  dFdxCoarse: makePureWithEmit("dFdxCoarse", { glsl: "dFdxCoarse", wgsl: "dpdxCoarse" }, elementWise),
+  dFdyCoarse: makePureWithEmit("dFdyCoarse", { glsl: "dFdyCoarse", wgsl: "dpdyCoarse" }, elementWise),
+  fwidth:       makePure("fwidth", elementWise),
+  fwidthFine:   makePureWithEmit("fwidthFine",   { glsl: "fwidthFine",   wgsl: "fwidthFine" },   elementWise),
+  fwidthCoarse: makePureWithEmit("fwidthCoarse", { glsl: "fwidthCoarse", wgsl: "fwidthCoarse" }, elementWise),
 
   // any/all over vec<bool>
   any: makePure("any", () => Tbool),

@@ -97,8 +97,20 @@ export declare function dFdx(x: number): number;
 export declare function dFdx<T extends V2f | V3f | V4f>(x: T): T;
 export declare function dFdy(x: number): number;
 export declare function dFdy<T extends V2f | V3f | V4f>(x: T): T;
+export declare function dFdxFine(x: number): number;
+export declare function dFdxFine<T extends V2f | V3f | V4f>(x: T): T;
+export declare function dFdyFine(x: number): number;
+export declare function dFdyFine<T extends V2f | V3f | V4f>(x: T): T;
+export declare function dFdxCoarse(x: number): number;
+export declare function dFdxCoarse<T extends V2f | V3f | V4f>(x: T): T;
+export declare function dFdyCoarse(x: number): number;
+export declare function dFdyCoarse<T extends V2f | V3f | V4f>(x: T): T;
 export declare function fwidth(x: number): number;
 export declare function fwidth<T extends V2f | V3f | V4f>(x: T): T;
+export declare function fwidthFine(x: number): number;
+export declare function fwidthFine<T extends V2f | V3f | V4f>(x: T): T;
+export declare function fwidthCoarse(x: number): number;
+export declare function fwidthCoarse<T extends V2f | V3f | V4f>(x: T): T;
 
 // ─── fragment-only ───────────────────────────────────────────────────
 
