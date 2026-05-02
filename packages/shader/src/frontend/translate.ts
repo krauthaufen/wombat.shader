@@ -350,10 +350,18 @@ function translateStmtInner(node: ts.Statement, ctx: Ctx): Stmt {
   if (ts.isExpressionStatement(node)) {
     const e = translateAssignmentLikeExpression(node.expression, ctx);
     if (e) return e; // statement-yielding form (e.g. assignment)
-    // Barrier intrinsics lower directly to Barrier statements.
+    // Barrier / discard intrinsics lower directly to statements. Both
+    // call-form (`discard()`) and bare-identifier form (`discard;`) are
+    // accepted — WGSL `discard` is a statement, not an expression.
     const expr = node.expression;
     if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression)) {
       const name = expr.expression.text;
+      if (name === "workgroupBarrier") return { kind: "Barrier", scope: "workgroup" };
+      if (name === "storageBarrier")   return { kind: "Barrier", scope: "storage" };
+      if (name === "discard")          return { kind: "Discard" };
+    }
+    if (ts.isIdentifier(expr)) {
+      const name = expr.text;
       if (name === "workgroupBarrier") return { kind: "Barrier", scope: "workgroup" };
       if (name === "storageBarrier")   return { kind: "Barrier", scope: "storage" };
       if (name === "discard")          return { kind: "Discard" };
@@ -563,11 +571,10 @@ function translateIdentifier(node: ts.Identifier, ctx: Ctx): Expr {
   if (closureType) {
     return { kind: "ReadInput", scope: "Closure", name: node.text, type: closureType };
   }
-  // Unresolved identifier — try the externalTypes table first (uniform /
-  // sampler / storage names declared at module level), else fall back
-  // to f32. Treat as ReadInput("Uniform").
-  const t = ctx.externalTypes.get(node.text) ?? Tf32;
-  return { kind: "ReadInput", scope: "Uniform", name: node.text, type: t };
+  const ext = ctx.externalTypes.get(node.text);
+  if (ext) return { kind: "ReadInput", scope: "Uniform", name: node.text, type: ext };
+  addDiagnostic(ctx, node, `frontend: unresolved identifier '${node.text}'`);
+  return { kind: "Const", value: { kind: "Float", value: 0 }, type: Tf32 };
 }
 
 function translateBinary(node: ts.BinaryExpression, ctx: Ctx): Expr {
