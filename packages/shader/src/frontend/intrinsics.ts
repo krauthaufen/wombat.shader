@@ -138,9 +138,10 @@ export const INTRINSICS: Record<string, IntrinsicRef> = {
   refract: makePure("refract", elementWise),
   faceforward: makePure("faceforward", elementWise),
 
-  // derivatives (fragment-only)
-  dFdx: makePure("dFdx", elementWise),
-  dFdy: makePure("dFdy", elementWise),
+  // derivatives (fragment-only). GLSL spells them `dFdx`/`dFdy`,
+  // WGSL spells them `dpdx`/`dpdy`; `fwidth` is the same in both.
+  dFdx: makePureWithEmit("dFdx", { glsl: "dFdx", wgsl: "dpdx" }, elementWise),
+  dFdy: makePureWithEmit("dFdy", { glsl: "dFdy", wgsl: "dpdy" }, elementWise),
   fwidth: makePure("fwidth", elementWise),
 
   // any/all over vec<bool>
