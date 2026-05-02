@@ -743,18 +743,37 @@ function collectCaptureUses(
   const captures: ts.Identifier[] = [];
 
   function visit(node: ts.Node, scopeBound: Set<string>): void {
+    // Statement-list nodes: walk children sequentially, threading
+    // each VariableStatement's new bindings into the scope visible
+    // to subsequent siblings. Without this, sibling statements after
+    // `const x = …` mis-classify `x` as a closure capture (the IR
+    // emits a `ReadInput("Closure", "x")` and the runtime later
+    // throws "can't find variable x").
+    if (ts.isBlock(node) || ts.isModuleBlock(node) || ts.isSourceFile(node)) {
+      let bound = scopeBound;
+      for (const s of node.statements) {
+        visit(s, bound);
+        if (ts.isVariableStatement(s)) {
+          const next = new Set(bound);
+          for (const d of s.declarationList.declarations) {
+            if (ts.isIdentifier(d.name)) next.add(d.name.text);
+          }
+          bound = next;
+        }
+      }
+      return;
+    }
+    if (ts.isCaseBlock(node)) {
+      for (const c of node.clauses) visit(c, scopeBound);
+      return;
+    }
     if (ts.isVariableStatement(node)) {
-      const newBound = new Set(scopeBound);
+      // Each initializer sees the outer scope — TDZ rules mean a
+      // multi-decl `const a = …, b = …` doesn't let `b`'s init see
+      // `a` as bound, and `a`'s init never sees its own name.
       for (const d of node.declarationList.declarations) {
-        if (ts.isIdentifier(d.name)) newBound.add(d.name.text);
         if (d.initializer) visit(d.initializer, scopeBound);
       }
-      // Subsequent siblings in this scope see these names — but
-      // forEachChild iterates in source order so the new bindings
-      // need to flow forward. We don't have to handle the binding
-      // order rigorously for our use case; treating all locals as
-      // bound is enough.
-      scopeBound = newBound;
       return;
     }
     if (ts.isParameter(node) && ts.isIdentifier(node.name)) {
