@@ -24,6 +24,8 @@ export { resolveHoles } from "./resolveHoles.js";
 export type { HoleValue, Holes } from "./resolveHoles.js";
 export { reverseMatrixOps } from "./reverseMatrixOps.js";
 export { relinkVars } from "./relinkVars.js";
+export { extractFusedEntry, extractSingleEntry } from "./extractHelpers.js";
+export { linkHelpers } from "./linkHelpers.js";
 
 export {
   isPure,

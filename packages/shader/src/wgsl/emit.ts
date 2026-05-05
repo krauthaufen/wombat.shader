@@ -141,12 +141,14 @@ export function emitWgsl(module: Module, entryName?: string): EmitResult {
     out: w,
     structs: new Set(),
     bindings: { inputs: [], outputs: [], uniforms: [], samplers: [], storage: [] },
-    entryOutStruct: undefined,
+    outLocal: undefined,
+    inputVarName: "in",
   };
   // Build name → buffer-struct map so `expr()` knows that a
   // ReadInput("Uniform", "u_camera_view") whose decl has buffer:"Camera"
   // emits as `Camera.u_camera_view`.
   bufferOf = new Map<string, string>();
+  currentCtx = ctx;
   for (const v of module.values) {
     if (v.kind !== "Uniform") continue;
     for (const u of v.uniforms) {
@@ -178,7 +180,7 @@ export function emitWgsl(module: Module, entryName?: string): EmitResult {
 
   // User functions.
   for (const v of module.values) {
-    if (v.kind === "Function") emitFunction(ctx, v.signature, v.body);
+    if (v.kind === "Function") emitFunction(ctx, v.signature, v.body, v.attributes);
   }
 
   // Stage entry function.
@@ -214,13 +216,24 @@ interface Ctx {
   readonly structs: Set<string>;
   readonly bindings: MutableBindings;
   /**
-   * Mutated by `emitEntryFunction` while emitting an entry body whose
-   * return type is a synthesized output struct. When set, a bare
-   * `Return` Stmt emits `return out;` (the synth output) instead of
-   * `return;` — letting `liftReturns`'s lifted early-exit returns
-   * actually compile.
+   * Mutated while emitting a function (entry or helper) whose return
+   * type is a struct that the body fills via `WriteOutput` / writes
+   * to a local `out`. When set, a bare `Return` Stmt emits
+   * `return out;` (surfacing the local) instead of `return;`. Lets
+   * `liftReturns`'s lifted early-exit returns work in entries AND in
+   * extracted helpers (`extractHelpers` pass), where each helper
+   * returns its own output struct by value.
    */
-  entryOutStruct: string | undefined;
+  outLocal: string | undefined;
+  /**
+   * Where `ReadInput("Input", name)` resolves. Default `"in"` (an
+   * entry takes its inputs as a single struct param `in`). Helper
+   * functions extracted by `extractHelpers` use the same struct for
+   * inputs AND outputs (the "merged state" model), so the helper
+   * sets this to its `out` local — both upstream-helper writes and
+   * wrapper-supplied inputs are read from the same place.
+   */
+  inputVarName: string;
 }
 
 interface EntryIO {
@@ -499,6 +512,7 @@ function emitFunction(
   ctx: Ctx,
   sig: { name: string; returnType: Type; parameters: readonly { name: string; type: Type; modifier: "in" | "inout" }[] },
   body: Stmt,
+  attributes: readonly import("../ir/index.js").FnAttr[] | undefined,
 ): void {
   const params = sig.parameters
     .map((p) => `${safeName(p.name)}: ${p.modifier === "inout" ? `ptr<function, ${typeStr(p.type)}>` : typeStr(p.type)}`)
@@ -506,7 +520,42 @@ function emitFunction(
   const ret = sig.returnType.kind === "Void" ? "" : ` -> ${typeStr(sig.returnType)}`;
   ctx.out.line(`fn ${safeName(sig.name)}(${params})${ret} {`);
   ctx.out.inc();
-  emitStmt(ctx, body);
+
+  const isMergedHelper = attributes?.includes("merged_state_helper") ?? false;
+
+  if (isMergedHelper) {
+    // Merged-state helper: single in-parameter carries both
+    // upstream-helper writes and the wrapper's inputs; the body
+    // mutates a copy and returns it. ReadInput("Input", X) and
+    // WriteOutput(X) both resolve against `out.X`.
+    const stateParam = sig.parameters[0];
+    if (!stateParam) {
+      throw new Error(`emitWgsl: merged_state_helper "${sig.name}" needs at least one parameter`);
+    }
+    ctx.out.line(`var out: ${typeStr(sig.returnType)} = ${safeName(stateParam.name)};`);
+    const prevOutLocal = ctx.outLocal;
+    const prevInputVar = ctx.inputVarName;
+    ctx.outLocal = "out";
+    ctx.inputVarName = "out";
+    emitStmt(ctx, body);
+    ctx.outLocal = prevOutLocal;
+    ctx.inputVarName = prevInputVar;
+    if (!endsWithReturn(body)) ctx.out.line("return out;");
+  } else if (sig.returnType.kind === "Struct") {
+    // Regular struct-returning function (rarely used today, but
+    // makes the case symmetric with entries): body fills `out`
+    // imperatively via WriteOutput, ReadInput stays on the
+    // function's regular `in.<x>` resolution.
+    ctx.out.line(`var out: ${typeStr(sig.returnType)};`);
+    const prevOutLocal = ctx.outLocal;
+    ctx.outLocal = "out";
+    emitStmt(ctx, body);
+    ctx.outLocal = prevOutLocal;
+    if (!endsWithReturn(body)) ctx.out.line("return out;");
+  } else {
+    emitStmt(ctx, body);
+  }
+
   ctx.out.dec();
   ctx.out.line("}");
   ctx.out.blank();
@@ -559,10 +608,10 @@ function emitEntryFunction(ctx: Ctx, e: EntryDef, io: EntryIO): void {
   // `liftReturns` produces these for non-tail early-exits; without
   // this rewrite we'd emit `return;` and WGSL would reject the
   // type mismatch (function returns a struct but `return;` doesn't).
-  const prevReturn = ctx.entryOutStruct;
-  ctx.entryOutStruct = io.hasOutputStruct ? io.outputStructName : undefined;
+  const prevReturn = ctx.outLocal;
+  ctx.outLocal = io.hasOutputStruct ? "out" : undefined;
   emitStmt(ctx, e.body);
-  ctx.entryOutStruct = prevReturn;
+  ctx.outLocal = prevReturn;
   // Synth tail return — only when the body doesn't already end with
   // a Return (which it does iff `liftReturns` wrapped it in one;
   // we strip that trailing Return there for tail-position writes,
@@ -627,9 +676,11 @@ function emitStmt(ctx: Ctx, s: Stmt): void {
       return;
     }
     case "WriteOutput": {
-      // Stage outputs in WGSL are fields on the synthetic `out` struct.
+      // Stage outputs are fields on the function's local output struct
+      // (entry: `out`; extracted helper: same `out`, but the merged
+      // state struct).
       const idx = s.index ? `[${expr(s.index)}]` : "";
-      ctx.out.write(`out.${safeName(s.name)}${idx} = `);
+      ctx.out.write(`${ctx.outLocal ?? "out"}.${safeName(s.name)}${idx} = `);
       const v = s.value as { span?: Span };
       if (v.span) ctx.out.writeSpan(v.span);
       ctx.out.endLine(`${rexpr(s.value)};`);
@@ -651,7 +702,7 @@ function emitStmt(ctx: Ctx, s: Stmt): void {
       // can't return void. `liftReturns` emits these for non-tail
       // early-exit returns; the entry emitter sets `entryOutStruct`
       // while emitting the body so we know the surrounding context.
-      ctx.out.line(ctx.entryOutStruct ? "return out;" : "return;");
+      ctx.out.line(ctx.outLocal ? "return out;" : "return;");
       return;
     case "ReturnValue":
       ctx.out.line(`return ${expr(s.value)};`);
@@ -766,6 +817,11 @@ const BIN_OP: Partial<Record<Expr["kind"], string>> = {
 // Set at the start of each emitWgsl call; lets `expr` resolve uniform
 // names that live inside a uniform-block struct.
 let bufferOf: Map<string, string> = new Map();
+// Module-global ref to the current Ctx so the free `expr` / `lexpr`
+// functions can resolve `ReadInput("Input", …)` against whichever
+// `inputVarName` the surrounding entry / helper has set.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let currentCtx: Ctx | undefined;
 
 export function expr(e: Expr): string {
   switch (e.kind) {
@@ -774,7 +830,7 @@ export function expr(e: Expr): string {
     case "Const":
       return literal(e.value);
     case "ReadInput": {
-      if (e.scope === "Input") return `in.${safeName(e.name)}`;
+      if (e.scope === "Input") return `${currentCtx!.inputVarName}.${safeName(e.name)}`;
       const buf = bufferOf.get(e.name);
       if (buf) return `${safeName(buf)}.${safeName(e.name)}`;
       return safeName(e.name);
@@ -900,10 +956,17 @@ export function lexpr(l: LExpr): string {
     case "LMatrixElement":
       return `${lexpr(l.matrix)}[${expr(l.col)}][${expr(l.row)}]`;
     case "LInput":
-      // Stage outputs are written via the synthetic `out` struct.
-      return l.scope === "Output"
-        ? `out.${safeName(l.name)}${l.index ? `[${expr(l.index)}]` : ""}`
-        : safeName(l.name);
+      // Outputs go to the function's `out` local (entry or helper).
+      // Inputs come from `inputVarName` (default `in`; helpers
+      // share state with their reads, so they target their own
+      // `out`).
+      if (l.scope === "Output") {
+        return `${currentCtx!.outLocal ?? "out"}.${safeName(l.name)}${l.index ? `[${expr(l.index)}]` : ""}`;
+      }
+      if (l.scope === "Input") {
+        return `${currentCtx!.inputVarName}.${safeName(l.name)}${l.index ? `[${expr(l.index)}]` : ""}`;
+      }
+      return safeName(l.name);
   }
 }
 

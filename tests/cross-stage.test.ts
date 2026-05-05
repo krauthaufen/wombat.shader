@@ -15,6 +15,7 @@ import {
 import {
   composeStages,
   linkFragmentOutputs,
+  linkHelpers,
   pruneCrossStage,
   reduceUniforms,
 } from "@aardworx/wombat.shader/passes";
@@ -268,10 +269,21 @@ describe("composeStages", () => {
     // Outputs: only `outColor`. `fragA_color` is internalised as a
     // carrier because `fragB` reads it.
     expect(merged.outputs.map((o) => o.name)).toEqual(["outColor"]);
-    // Body should declare a `_pipe_fragA_color` carrier.
+    // Body declares a single `s: <FusedState>` Var (the merged-state
+    // model's local) and the State struct includes `fragA_color`
+    // as a carrier field.
     const seq = merged.body.kind === "Sequential" ? merged.body.body : [merged.body];
-    const decls = seq.flatMap((s) => s.kind === "Declare" ? [s.var.name] : []);
-    expect(decls).toContain("_pipe_fragA_color");
+    const decls = seq.flatMap((s) => s.kind === "Declare" ? [s.var] : []);
+    expect(decls.length).toBe(1);
+    expect(decls[0]!.type.kind).toBe("Struct");
+    if (decls[0]!.type.kind === "Struct") {
+      const fieldNames = decls[0]!.type.fields.map((f) => f.name).sort();
+      expect(fieldNames).toContain("fragA_color");
+      expect(fieldNames).toContain("outColor");
+    }
+    // The State struct itself is added to module.types.
+    const stateName = decls[0]!.type.kind === "Struct" ? decls[0]!.type.name : "";
+    expect(composed.types.some((t) => t.kind === "Struct" && t.name === stateName)).toBe(true);
   });
 
   it("vertex + fragment are not fused but coexist as a pipeline", () => {
@@ -378,11 +390,20 @@ describe("integration: composeStages → pruneCrossStage → reduceUniforms", ()
     });
     const linkedMerged = entriesOf(linked)[0]!;
     expect(linkedMerged.outputs.map((o) => o.name)).toEqual(["outColor"]);
-    // After link DCE the dropped output's u_dead reference is gone.
+    // After link DCE the dropped output's wrapper-side surfacing is
+    // gone. The helper body still references u_dead until
+    // `linkHelpers` runs cross-helper liveness — that's the next
+    // step.
     expect(JSON.stringify(linkedMerged)).not.toContain("u_dead");
 
+    // linkHelpers drops the helper's now-dead `WriteOutput("tmp")`
+    // (because `tmp` is not in any wrapper-surfaced State field
+    // anymore) and the standalone `dceStmt` collapses the now-dead
+    // u_dead reads inside that write's RHS.
+    const helperLinked = linkHelpers(linked);
+
     // reduceUniforms now drops u_dead from the Uniform decl.
-    const reduced = reduceUniforms(linked);
+    const reduced = reduceUniforms(helperLinked);
     const u = reduced.values.find((x) => x.kind === "Uniform");
     expect(u?.kind).toBe("Uniform");
     if (u?.kind === "Uniform") {

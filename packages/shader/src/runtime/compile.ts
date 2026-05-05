@@ -20,6 +20,7 @@ import {
   composeStages,
   cse,
   dce,
+  linkHelpers,
   foldConstants,
   inferStorageAccess,
   inlinePass,
@@ -170,6 +171,13 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
     m = foldConstants(m);
     m = cse(m);
     m = dce(m);
+    // Cross-helper liveness DCE — propagates "this wrapper output is
+    // dead" / "this State field is unread" backward through the
+    // helper-call chain and prunes helper bodies + the State struct.
+    // Runs BEFORE pruneCrossStage so that dropping fused-VS outputs
+    // (which lose their consumers in linkFragmentOutputs) can shrink
+    // the State struct, freeing up dead VS-side reads in turn.
+    m = linkHelpers(m);
     // pruneCrossStage runs AFTER linkFragmentOutputs so that dead
     // fragment outputs have already been removed (and their reads
     // DCE'd). The pass is iterative: dropping a VS output may shrink
@@ -177,6 +185,10 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
     // a downstream sibling — handled by the fixed-point loop inside
     // pruneCrossStage itself.
     m = pruneCrossStage(m);
+    // Re-run cross-helper liveness after pruneCrossStage may have
+    // dropped more outputs. Cheap when there's nothing left to do
+    // (single fixed-point iteration).
+    m = linkHelpers(m);
     m = reduceUniforms(m);
   }
   // Storage-buffer inference must run after the optimiser passes (which

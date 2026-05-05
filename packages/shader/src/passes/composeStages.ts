@@ -37,6 +37,7 @@ import type {
 import { mapStmt } from "./transform.js";
 import { dceStmt } from "./dce.js";
 import { readInputs } from "./analysis.js";
+import { extractFusedEntry } from "./extractHelpers.js";
 
 /**
  * Sequentially compose same-stage entries within a Module.
@@ -53,6 +54,7 @@ export function composeStages(module: Module): Module {
   }
 
   const fused: ValueDef[] = [];
+  const newTypes: import("../ir/index.js").TypeDef[] = [];
   for (const stage of ["vertex", "fragment", "compute"] as const) {
     const entries = groups[stage];
     if (entries.length === 0) continue;
@@ -60,22 +62,33 @@ export function composeStages(module: Module): Module {
       for (const e of entries) fused.push({ kind: "Entry", entry: e });
       continue;
     }
-    let merged = entries[0]!;
-    for (let i = 1; i < entries.length; i++) {
-      merged = fusePair(merged, entries[i]!);
-    }
-    fused.push({ kind: "Entry", entry: merged });
+    // Multi-entry same-stage fusion. We always go through helper
+    // extraction (the merged-state model) so the fused entry has
+    // correct semantics for imperative early-`return`s — A's
+    // `return X` exits only A's helper, the wrapper still calls B
+    // afterwards. Cross-helper DCE/auto-pass-through/tightest-
+    // input pruning is then `linkHelpers`'s job.
+    const fusedName = entries.map((e) => e.name).join("_");
+    const result = extractFusedEntry(entries, fusedName);
+    newTypes.push(result.state);
+    for (const h of result.helpers) fused.push(h);
+    fused.push({ kind: "Entry", entry: result.wrapperEntry });
   }
 
-  return { ...module, values: [...otherValues, ...fused] };
+  return {
+    ...module,
+    types: [...module.types, ...newTypes],
+    values: [...otherValues, ...fused],
+  };
 }
 
 /**
- * Fuse `a` then `b`. `b`'s `ReadInput("Input", name)` references that
- * match an `a` output get replaced by reads of synthetic locals that
- * carry `a`'s written value through.
+ * Legacy body-concatenation fuser. NO LONGER CALLED — `composeStages`
+ * now always routes same-stage fusion through `extractFusedEntry` so
+ * helper-bounded `Return` semantics work. Kept for one release as a
+ * reference for the carrier mechanism (which the linker mimics).
  */
-function fusePair(a: EntryDef, b: EntryDef): EntryDef {
+function _legacyFusePair(a: EntryDef, b: EntryDef): EntryDef {
   if (a.stage !== b.stage) {
     throw new Error(`composeStages: stages must match (got ${a.stage} + ${b.stage})`);
   }

@@ -325,7 +325,27 @@ export type Stmt = _StmtBase & (
 // Definitions and module
 // ─────────────────────────────────────────────────────────────────────
 
-export type FnAttr = "inline" | "no_inline" | "must_use";
+export type FnAttr =
+  | "inline"
+  | "no_inline"
+  | "must_use"
+  /**
+   * Helper extracted from a fused stage entry. Its body uses the
+   * `WriteOutput` / `ReadInput("Input", …)` / `Return` Stmts from
+   * the original entry, but the emitter targets a single merged
+   * "state" struct that's both the helper's input parameter and
+   * its return value. Tells WGSL/GLSL emit to:
+   *
+   *   - declare `var out = <stateParam>;` at the top of the body
+   *     (instead of `var out: T;`),
+   *   - resolve `ReadInput("Input", X)` against `out.X` (since the
+   *     helper reads what upstream helpers wrote into the same
+   *     struct), and
+   *   - emit `return out;` at the tail.
+   *
+   * The single in-parameter is taken to be the merged state.
+   */
+  | "merged_state_helper";
 
 export interface BindingPoint {
   readonly group: number;
