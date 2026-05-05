@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "prepare": "ts-patch install -s"
+    "prepare": "ts-patch install -s",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@aardworx/wombat.shader": "*",
@@ -18,6 +19,7 @@
     "@boperators/plugin-vite": "^0.3.2",
     "@boperators/plugin-ts-language-server": "^0.3.2",
     "ts-patch": "^3.2.1",
-    "@boperators/plugin-tsc": "^0.3.2"
+    "@boperators/plugin-tsc": "^0.3.2",
+    "patch-package": "^8.0.1"
   }
 }
