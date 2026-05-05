@@ -23,6 +23,7 @@ export { inferStorageAccess } from "./inferStorageAccess.js";
 export { resolveHoles } from "./resolveHoles.js";
 export type { HoleValue, Holes } from "./resolveHoles.js";
 export { reverseMatrixOps } from "./reverseMatrixOps.js";
+export { relinkVars } from "./relinkVars.js";
 
 export {
   isPure,

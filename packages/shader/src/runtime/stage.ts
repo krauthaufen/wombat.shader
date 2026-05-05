@@ -27,7 +27,7 @@ import {
   type Module,
   type ValueDef,
 } from "../ir/index.js";
-import { resolveHoles, type HoleValue } from "../passes/index.js";
+import { relinkVars, resolveHoles, type HoleValue } from "../passes/index.js";
 import {
   compileModule,
   type CompileOptions,
@@ -110,8 +110,13 @@ export function stage(
   id?: string,
   avalHoles: AvalGetters = {},
 ): Effect {
-  const stageId = id ?? hashModule(template);
-  return makeEffect([{ template, holes, avalHoles, id: stageId }], stageId);
+  // Templates emitted by the shader-vite plugin arrive via JSON, which
+  // strips Var object identity — every reference to a single Var
+  // becomes a fresh duplicate. Relink by name so downstream passes
+  // (DCE, CSE, inline) match Vars by reference equality again.
+  const linked = relinkVars(template);
+  const stageId = id ?? hashModule(linked);
+  return makeEffect([{ template: linked, holes, avalHoles, id: stageId }], stageId);
 }
 
 /**
@@ -250,6 +255,8 @@ export function computeShader(
   id?: string,
   avalHoles: AvalGetters = {},
 ): ComputeShader {
+  // Same JSON-roundtrip Var-identity hazard as `stage()` — relink.
+  template = relinkVars(template);
   const stageId = id ?? hashModule(template);
   const stage: Stage = { template, holes, avalHoles, id: stageId };
   const cache = new Map<string, CompiledEffect>();
