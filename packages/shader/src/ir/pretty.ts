@@ -152,6 +152,12 @@ function stmt(s: Stmt, indent: number): string[] {
       out.push(`${pad}} while (${expr(s.cond)})`);
       return out;
     }
+    case "Loop": {
+      const out = [`${pad}loop {`];
+      for (const l of stmt(s.body, indent + 1)) out.push(l);
+      out.push(`${pad}}`);
+      return out;
+    }
     case "Switch": {
       const out = [`${pad}switch (${expr(s.value)}) {`];
       for (const c of s.cases) {

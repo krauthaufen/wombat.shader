@@ -384,6 +384,12 @@ function emitStmt(ctx: Ctx, s: Stmt): void {
       ctx.out.inc(); emitStmt(ctx, s.body); ctx.out.dec();
       ctx.out.line(`} while (${expr(s.cond)});`);
       return;
+    case "Loop":
+      // GLSL has no `loop {}` keyword; lower to `while (true) {}`.
+      ctx.out.line("while (true) {");
+      ctx.out.inc(); emitStmt(ctx, s.body); ctx.out.dec();
+      ctx.out.line("}");
+      return;
     case "Switch":
       emitSwitch(ctx, s.value, s.cases, s.default);
       return;

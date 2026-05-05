@@ -377,7 +377,21 @@ function typeFromNode(node: ts.TypeNode, ctx: Ctx): Type {
 
 function translateBlock(block: ts.Block, ctx: Ctx): Stmt {
   const stmts: Stmt[] = [];
-  for (const child of block.statements) stmts.push(translateStmt(child, ctx));
+  for (const child of block.statements) {
+    const s = translateStmt(child, ctx);
+    // Flatten nested Sequential children — they came from multi-
+    // declarator `const a = x, b = y;` (translateVarDecl wraps the
+    // per-decl Declares in a Sequential because it has to return one
+    // Stmt). Without flattening, DCE's `collectUsed` walks only the
+    // inner Sequential's body and never sees the consumers in the
+    // enclosing block, so all multi-decl Declares get pruned as
+    // "unused" and their identifiers emerge undefined in WGSL.
+    if (s.kind === "Sequential") {
+      for (const inner of s.body) stmts.push(inner);
+    } else {
+      stmts.push(s);
+    }
+  }
   if (stmts.length === 0) return { kind: "Nop" };
   if (stmts.length === 1) return stmts[0]!;
   return { kind: "Sequential", body: stmts };
@@ -465,9 +479,24 @@ function translateVarDecl(node: ts.VariableStatement, ctx: Ctx): Stmt {
 }
 
 function translateIf(node: ts.IfStatement, ctx: Ctx): Stmt {
+  const cond = translateExpr(node.expression, ctx);
+  // Constant-fold `if (true)` / `if (false)`. The frontend does NOT
+  // translate dead branches at all — wrapping a debug branch in
+  // `if (false)` used to keep emitting the dead body into WGSL,
+  // which then tripped on stale identifier references and other
+  // DSL footguns. Fold here so users can rely on `if (false)` /
+  // `if (true)` actually disabling / enabling code.
+  if (cond.kind === "Const" && cond.value.kind === "Bool") {
+    if (cond.value.value === true) {
+      return translateStmt(node.thenStatement, ctx);
+    }
+    return node.elseStatement
+      ? translateStmt(node.elseStatement, ctx)
+      : { kind: "Nop" };
+  }
   return {
     kind: "If",
-    cond: translateExpr(node.expression, ctx),
+    cond,
     then: translateStmt(node.thenStatement, ctx),
     ...(node.elseStatement ? { else: translateStmt(node.elseStatement, ctx) } : {}),
   };

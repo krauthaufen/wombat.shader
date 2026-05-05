@@ -52,6 +52,8 @@ function recurse(s: Stmt): Stmt {
     case "While":
     case "DoWhile":
       return { ...s, body: dceStmt(s.body) };
+    case "Loop":
+      return { ...s, body: dceStmt(s.body) };
     case "Switch": {
       const cases = s.cases.map((c) => ({ ...c, body: dceStmt(c.body) }));
       const def = s.default ? dceStmt(s.default) : undefined;

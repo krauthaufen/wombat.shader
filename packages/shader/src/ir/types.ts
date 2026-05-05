@@ -310,6 +310,7 @@ export type Stmt = _StmtBase & (
     }
   | { readonly kind: "While"; readonly cond: Expr; readonly body: Stmt }
   | { readonly kind: "DoWhile"; readonly cond: Expr; readonly body: Stmt }
+  | { readonly kind: "Loop"; readonly body: Stmt }
   | {
       readonly kind: "Switch";
       readonly value: Expr;

@@ -186,6 +186,9 @@ export function visitStmt(s: Stmt, v: StmtVisitor): void {
       visitExprDeep(s.cond, v.expr);
       visitStmt(s.body, v);
       break;
+    case "Loop":
+      visitStmt(s.body, v);
+      break;
     case "Switch":
       visitExprDeep(s.value, v.expr);
       for (const c of s.cases) visitStmt(c.body, v);

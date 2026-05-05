@@ -275,6 +275,10 @@ export function mapStmtChildren(s: Stmt, m: StmtChildMapper): Stmt {
       const cond = fe(s.cond), body = fs(s.body);
       return cond === s.cond && body === s.body ? s : { ...s, cond, body };
     }
+    case "Loop": {
+      const body = fs(s.body);
+      return body === s.body ? s : { ...s, body };
+    }
     case "Switch": {
       const value = fe(s.value);
       let casesChanged = false;

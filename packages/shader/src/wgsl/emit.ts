@@ -2,6 +2,16 @@
 //
 // Conventions vs. the GLSL emitter:
 //
+// Reserved-word handling. WGSL has a long list of keywords +
+// reserved identifiers (https://www.w3.org/TR/WGSL/#keyword-summary
+// + #reserved-words). A user-supplied name like `meta`, `mat`,
+// `texture`, `module`, etc. would otherwise emerge as a parse
+// error ("Expected an Identifier, but got a ReservedWord"). The
+// emitter routes every user name through `safeName(...)` which
+// prefixes reserved tokens with `_w_`. Var identity is preserved
+// across declaration / reference sites because the rename is
+// purely a function of the original name.
+//
 //  - Address spaces are explicit. Uniforms go in `var<uniform>`, storage
 //    buffers in `var<storage>`, samplers/textures are flat globals.
 //  - Entry inputs/outputs are wrapped in a struct that carries the
@@ -69,6 +79,60 @@ export interface BackendMeta {
 // ─────────────────────────────────────────────────────────────────────
 // Entry point
 // ─────────────────────────────────────────────────────────────────────
+
+/** WGSL reserved words and keywords (per spec + commonly-clashing
+ *  user identifiers). Any user name in this set is rewritten to
+ *  `_w_<name>` before emission. The rewrite is total per name, so
+ *  declaration and reference sites stay in sync. */
+const WGSL_RESERVED: ReadonlySet<string> = new Set<string>([
+  // keywords
+  "alias", "break", "case", "const", "const_assert", "continue",
+  "continuing", "default", "diagnostic", "discard", "else", "enable",
+  "false", "fn", "for", "if", "let", "loop", "override", "requires",
+  "return", "struct", "switch", "true", "var", "while",
+  // type keywords
+  "array", "atomic", "bool", "f32", "f16", "i32", "u32", "mat2x2",
+  "mat2x3", "mat2x4", "mat3x2", "mat3x3", "mat3x4", "mat4x2",
+  "mat4x3", "mat4x4", "ptr", "sampler", "sampler_comparison",
+  "texture_1d", "texture_2d", "texture_2d_array", "texture_3d",
+  "texture_cube", "texture_cube_array", "texture_multisampled_2d",
+  "texture_storage_1d", "texture_storage_2d", "texture_storage_2d_array",
+  "texture_storage_3d", "texture_depth_2d", "texture_depth_2d_array",
+  "texture_depth_cube", "texture_depth_cube_array",
+  "texture_depth_multisampled_2d", "vec2", "vec3", "vec4",
+  // shorthand vec/mat
+  "mat2", "mat3", "mat4",
+  // reserved (per spec; subset of the most common collisions)
+  "NULL", "Self", "abstract", "active", "alignas", "alignof", "as",
+  "asm", "asm_fragment", "async", "attribute", "auto", "await",
+  "become", "binding_array", "cast", "catch", "class", "co_await",
+  "co_return", "co_yield", "coherent", "column_major", "common",
+  "compile", "compile_fragment", "concept", "const_cast", "consteval",
+  "constexpr", "constinit", "crate", "debugger", "decltype", "delete",
+  "demote", "demote_to_helper", "do", "dynamic_cast", "enum",
+  "explicit", "export", "extends", "extern", "external", "fallthrough",
+  "filter", "final", "finally", "friend", "from", "fxgroup", "get",
+  "goto", "groupshared", "highp", "impl", "implements", "import",
+  "inline", "instanceof", "interface", "layout", "lowp", "macro",
+  "macro_rules", "match", "mediump", "meta", "mod", "module", "move",
+  "mut", "mutable", "namespace", "new", "nil", "noexcept", "noinline",
+  "nointerpolation", "noperspective", "null", "nullptr", "of",
+  "operator", "package", "packoffset", "partition", "pass", "patch",
+  "pixelfragment", "precise", "precision", "premerge", "priv",
+  "protected", "pub", "public", "readonly", "ref", "regardless",
+  "register", "reinterpret_cast", "require", "resource", "restrict",
+  "self", "set", "shared", "sizeof", "smooth", "snorm", "static",
+  "static_assert", "static_cast", "std", "subroutine", "super",
+  "target", "template", "this", "thread_local", "throw", "trait",
+  "try", "type", "typedef", "typeid", "typename", "typeof", "union",
+  "unless", "unorm", "unsafe", "unsized", "use", "using", "varying",
+  "virtual", "volatile", "wgsl", "where", "with", "writeonly", "yield",
+]);
+
+/** Rewrite a user identifier into something WGSL won't reject. */
+export function safeName(name: string): string {
+  return WGSL_RESERVED.has(name) ? `_w_${name}` : name;
+}
 
 export function emitWgsl(module: Module, entryName?: string): EmitResult {
   const entry = pickEntry(module, entryName);
@@ -289,7 +353,7 @@ function emitStructDecl(ctx: Ctx, t: { kind: "Struct"; name: string; fields: rea
   ctx.out.line(`struct ${t.name} {`);
   ctx.out.inc();
   for (const f of t.fields) {
-    ctx.out.line(`${f.name}: ${typeStr(f.type)},`);
+    ctx.out.line(`${safeName(f.name)}: ${typeStr(f.type)},`);
   }
   ctx.out.dec();
   ctx.out.line("};");
@@ -311,12 +375,12 @@ function emitUniformGroup(ctx: Ctx, uniforms: readonly UniformDecl[], autoGroup:
       const structName = `_UB_${buffer}`;
       ctx.out.line(`struct ${structName} {`);
       ctx.out.inc();
-      for (const u of group) ctx.out.line(`${u.name}: ${typeStr(u.type)},`);
+      for (const u of group) ctx.out.line(`${safeName(u.name)}: ${typeStr(u.type)},`);
       ctx.out.dec();
       ctx.out.line("};");
       const grp = group[0]?.group ?? autoGroup;
       const slot = group[0]?.slot ?? nextSlot++;
-      ctx.out.line(`@group(${grp}) @binding(${slot}) var<uniform> ${buffer}: ${structName};`);
+      ctx.out.line(`@group(${grp}) @binding(${slot}) var<uniform> ${safeName(buffer)}: ${structName};`);
       for (const u of group) {
         ctx.bindings.uniforms.push({ name: `${buffer}.${u.name}`, group: grp, slot, type: u.type });
       }
@@ -324,7 +388,7 @@ function emitUniformGroup(ctx: Ctx, uniforms: readonly UniformDecl[], autoGroup:
       for (const u of group) {
         const grp = u.group ?? autoGroup;
         const slot = u.slot ?? nextSlot++;
-        ctx.out.line(`@group(${grp}) @binding(${slot}) var<uniform> ${u.name}: ${typeStr(u.type)};`);
+        ctx.out.line(`@group(${grp}) @binding(${slot}) var<uniform> ${safeName(u.name)}: ${typeStr(u.type)};`);
         ctx.bindings.uniforms.push({ name: u.name, group: grp, slot, type: u.type });
       }
     }
@@ -332,14 +396,14 @@ function emitUniformGroup(ctx: Ctx, uniforms: readonly UniformDecl[], autoGroup:
 }
 
 function emitSampler(ctx: Ctx, name: string, group: number, slot: number, type: Type): void {
-  ctx.out.line(`@group(${group}) @binding(${slot}) var ${name}: ${typeStr(type)};`);
+  ctx.out.line(`@group(${group}) @binding(${slot}) var ${safeName(name)}: ${typeStr(type)};`);
   ctx.bindings.samplers.push({ name, group, slot, type });
 }
 
 function emitStorageBuffer(
   ctx: Ctx, name: string, group: number, slot: number, layout: Type, access: "read" | "read_write",
 ): void {
-  ctx.out.line(`@group(${group}) @binding(${slot}) var<storage, ${access}> ${name}: ${typeStr(layout)};`);
+  ctx.out.line(`@group(${group}) @binding(${slot}) var<storage, ${access}> ${safeName(name)}: ${typeStr(layout)};`);
   ctx.bindings.storage.push({ name, group, slot, type: layout, access });
 }
 
@@ -358,7 +422,7 @@ function emitEntryStructs(ctx: Ctx, e: EntryDef): EntryIO {
       const loc = locationOf(p) ?? nextLoc++;
       const interp = interpolation(p);
       const decor = (interp ? `${interp} ` : "") + `@location(${loc})`;
-      ctx.out.line(`${decor} ${p.name}: ${typeStr(p.type)},`);
+      ctx.out.line(`${decor} ${safeName(p.name)}: ${typeStr(p.type)},`);
       ctx.bindings.inputs.push({ name: p.name, location: loc, type: p.type });
     }
     ctx.out.dec();
@@ -377,12 +441,12 @@ function emitEntryStructs(ctx: Ctx, e: EntryDef): EntryIO {
     for (const p of e.outputs) {
       const builtin = builtinName(p);
       if (builtin) {
-        ctx.out.line(`@builtin(${builtin}) ${p.name}: ${typeStr(p.type)},`);
+        ctx.out.line(`@builtin(${builtin}) ${safeName(p.name)}: ${typeStr(p.type)},`);
       } else {
         const loc = locationOf(p) ?? nextLoc++;
         const interp = interpolation(p);
         const decor = (interp ? `${interp} ` : "") + `@location(${loc})`;
-        ctx.out.line(`${decor} ${p.name}: ${typeStr(p.type)},`);
+        ctx.out.line(`${decor} ${safeName(p.name)}: ${typeStr(p.type)},`);
         ctx.bindings.outputs.push({ name: p.name, location: loc, type: p.type });
       }
     }
@@ -428,10 +492,10 @@ function emitFunction(
   body: Stmt,
 ): void {
   const params = sig.parameters
-    .map((p) => `${p.name}: ${p.modifier === "inout" ? `ptr<function, ${typeStr(p.type)}>` : typeStr(p.type)}`)
+    .map((p) => `${safeName(p.name)}: ${p.modifier === "inout" ? `ptr<function, ${typeStr(p.type)}>` : typeStr(p.type)}`)
     .join(", ");
   const ret = sig.returnType.kind === "Void" ? "" : ` -> ${typeStr(sig.returnType)}`;
-  ctx.out.line(`fn ${sig.name}(${params})${ret} {`);
+  ctx.out.line(`fn ${safeName(sig.name)}(${params})${ret} {`);
   ctx.out.inc();
   emitStmt(ctx, body);
   ctx.out.dec();
@@ -470,11 +534,11 @@ function emitEntryFunction(ctx: Ctx, e: EntryDef, io: EntryIO): void {
   for (const p of e.arguments) {
     const b = builtinName(p);
     if (b) params.push(`@builtin(${b}) ${b}: ${typeStr(p.type)}`);
-    else params.push(`${p.name}: ${typeStr(p.type)}`);
+    else params.push(`${safeName(p.name)}: ${typeStr(p.type)}`);
   }
 
   const ret = io.hasOutputStruct && io.outputStructName ? ` -> ${io.outputStructName}` : "";
-  ctx.out.line(`fn ${e.name}(${params.join(", ")})${ret} {`);
+  ctx.out.line(`fn ${safeName(e.name)}(${params.join(", ")})${ret} {`);
   ctx.out.inc();
 
   // Declare an output struct local variable so writes can target its fields.
@@ -514,7 +578,7 @@ function emitStmt(ctx: Ctx, s: Stmt): void {
     case "Declare": {
       const init = s.init ? ` = ${rexpr(s.init)}` : "";
       const keyword = s.var.mutable ? "var" : "let";
-      ctx.out.line(`${keyword} ${s.var.name}: ${typeStr(s.var.type)}${init};`);
+      ctx.out.line(`${keyword} ${safeName(s.var.name)}: ${typeStr(s.var.type)}${init};`);
       return;
     }
     case "Write": {
@@ -529,7 +593,7 @@ function emitStmt(ctx: Ctx, s: Stmt): void {
     case "WriteOutput": {
       // Stage outputs in WGSL are fields on the synthetic `out` struct.
       const idx = s.index ? `[${expr(s.index)}]` : "";
-      ctx.out.write(`out.${s.name}${idx} = `);
+      ctx.out.write(`out.${safeName(s.name)}${idx} = `);
       const v = s.value as { span?: Span };
       if (v.span) ctx.out.writeSpan(v.span);
       ctx.out.endLine(`${rexpr(s.value)};`);
@@ -597,6 +661,11 @@ function emitStmt(ctx: Ctx, s: Stmt): void {
       ctx.out.dec();
       ctx.out.line("}");
       return;
+    case "Loop":
+      ctx.out.line("loop {");
+      ctx.out.inc(); emitStmt(ctx, s.body); ctx.out.dec();
+      ctx.out.line("}");
+      return;
     case "Switch":
       emitSwitch(ctx, s.value, s.cases, s.default);
       return;
@@ -609,7 +678,7 @@ function forStmtText(s: Stmt): string {
     case "Declare": {
       const init = s.init ? ` = ${rexpr(s.init)}` : "";
       const keyword = s.var.mutable ? "var" : "let";
-      return `${keyword} ${s.var.name}: ${typeStr(s.var.type)}${init};`;
+      return `${keyword} ${safeName(s.var.name)}: ${typeStr(s.var.type)}${init};`;
     }
     case "Expression": return `${expr(s.value)};`;
     case "Write": return `${lexpr(s.target)} = ${expr(s.value)};`;
@@ -660,17 +729,17 @@ let bufferOf: Map<string, string> = new Map();
 export function expr(e: Expr): string {
   switch (e.kind) {
     case "Var":
-      return e.var.name;
+      return safeName(e.var.name);
     case "Const":
       return literal(e.value);
     case "ReadInput": {
-      if (e.scope === "Input") return `in.${e.name}`;
+      if (e.scope === "Input") return `in.${safeName(e.name)}`;
       const buf = bufferOf.get(e.name);
-      if (buf) return `${buf}.${e.name}`;
-      return e.name;
+      if (buf) return `${safeName(buf)}.${safeName(e.name)}`;
+      return safeName(e.name);
     }
     case "Call":
-      return `${e.fn.signature.name}(${e.args.map(expr).join(", ")})`;
+      return `${safeName(e.fn.signature.name)}(${e.args.map(expr).join(", ")})`;
     case "CallIntrinsic": {
       // Atomic ops take a pointer to the storage element as their first
       // argument: `atomicAdd(&buf[i], 1)`.
@@ -769,7 +838,7 @@ export function expr(e: Expr): string {
     case "VecNeq":
       return `(${expr(e.lhs)} != ${expr(e.rhs)})`;
     case "Field":
-      return `${expr(e.target)}.${e.name}`;
+      return `${expr(e.target)}.${safeName(e.name)}`;
     case "Item":
       return `${expr(e.target)}[${expr(e.index)}]`;
     case "DebugPrintf":
@@ -780,9 +849,9 @@ export function expr(e: Expr): string {
 export function lexpr(l: LExpr): string {
   switch (l.kind) {
     case "LVar":
-      return l.var.name;
+      return safeName(l.var.name);
     case "LField":
-      return `${lexpr(l.target)}.${l.name}`;
+      return `${lexpr(l.target)}.${safeName(l.name)}`;
     case "LItem":
       return `${lexpr(l.target)}[${expr(l.index)}]`;
     case "LSwizzle":
@@ -791,7 +860,9 @@ export function lexpr(l: LExpr): string {
       return `${lexpr(l.matrix)}[${expr(l.col)}][${expr(l.row)}]`;
     case "LInput":
       // Stage outputs are written via the synthetic `out` struct.
-      return l.scope === "Output" ? `out.${l.name}${l.index ? `[${expr(l.index)}]` : ""}` : l.name;
+      return l.scope === "Output"
+        ? `out.${safeName(l.name)}${l.index ? `[${expr(l.index)}]` : ""}`
+        : safeName(l.name);
   }
 }
 
