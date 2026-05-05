@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@aardworx/wombat.shader": "*",
+    "@aardworx/wombat.shader-vite": "*",
     "boperators": "^0.3.2"
   },
   "devDependencies": {
