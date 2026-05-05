@@ -8,10 +8,13 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@aardworx/wombat.shader": "*"
+    "@aardworx/wombat.shader": "*",
+    "boperators": "^0.3.2"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.69",
-    "vite": "^5.0.0"
+    "vite": "^5.0.0",
+    "@boperators/plugin-vite": "^0.3.2",
+    "@boperators/plugin-ts-language-server": "^0.3.2"
   }
 }
