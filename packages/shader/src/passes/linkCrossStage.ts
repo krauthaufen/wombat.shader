@@ -97,12 +97,26 @@ export function linkCrossStage(module: Module): Module {
     if (!target) target = vsOutputsByName.get(fi.name);
 
     if (target) {
-      if (target.name !== fi.name) {
-        renames.set(fi.name, target.name);
-        newFsInputs.push({ ...fi, name: target.name });
-      } else {
-        newFsInputs.push(fi);
-      }
+      // Adopt the target VS-output's Location for this FS input. The
+      // FS-input's original Location was inferred independently (by
+      // declaration order in the parameter type) and need not match
+      // the VS output's; without this rewrite the linker would emit
+      // VS and FS halves that disagree on which location each varying
+      // lives at — silently producing crossed-wires varyings.
+      const targetLoc = target.decorations.find((d) => d.kind === "Location");
+      const decorations = targetLoc
+        ? [
+            ...fi.decorations.filter((d) => d.kind !== "Location"),
+            targetLoc,
+          ]
+        : fi.decorations;
+      const renamed = target.name !== fi.name;
+      if (renamed) renames.set(fi.name, target.name);
+      newFsInputs.push({
+        ...fi,
+        ...(renamed ? { name: target.name } : {}),
+        decorations,
+      });
       continue;
     }
 

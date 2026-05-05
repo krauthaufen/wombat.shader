@@ -23,7 +23,7 @@ import type {
   ValueDef,
   Var,
 } from "../ir/index.js";
-import { mapExpr, mapStmt, mapStmtChildren } from "./transform.js";
+import { mapExpr, mapStmt } from "./transform.js";
 import { substVars, substVarsExpr } from "./substitute.js";
 
 export interface InlinePolicy {
@@ -121,10 +121,12 @@ function copyPropStmt(s: Stmt): Stmt {
   const out: Stmt[] = [];
   const subst = new Map<Var, Expr>();
   for (const child of s.body) {
-    // Substitute variables we've already bound.
-    const propagated = subst.size > 0
-      ? mapStmtChildren(child, { expr: (e) => substVarsExpr(e, subst) })
-      : child;
+    // Substitute variables we've already bound. Use `substVars`
+    // (which recurses into nested Stmts via mapStmt) rather than a
+    // shallow `mapStmtChildren`: an `if`/`for`/`while` body is a
+    // nested Stmt, and reads of substituted vars inside it must also
+    // be rewritten or they'd dangle when the Declare is dropped below.
+    const propagated = subst.size > 0 ? substVars(child, subst) : child;
     if (propagated.kind === "Declare" && propagated.init?.kind === "Expr") {
       const v = propagated.var;
       const init = propagated.init.value;
