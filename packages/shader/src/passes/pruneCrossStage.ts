@@ -1,5 +1,7 @@
 // pruneCrossStage — removes vertex outputs (and their compute chains)
-// that no fragment stage reads.
+// that no fragment stage reads, AND symmetrically drops the matching
+// fragment input declarations so VS-output and FS-input location sets
+// stay in lockstep.
 //
 // Problem statement. A `vertex + fragment` pipeline declares vertex
 // outputs by `name` and fragment inputs that read them via
@@ -17,7 +19,13 @@
 //      pipeline-mandatory and never pruned).
 //   3. Replace every `WriteOutput(deadName, ...)` in the vertex body
 //      with `Nop`. Run DCE.
-//   4. Re-run from (1) until the live-input set stops changing
+//   4. For each fragment entry, drop input declarations whose names
+//      aren't live (the body doesn't read them). Without this step
+//      the FS struct still emits `@location(N) v_x` for an attribute
+//      whose VS-output side just disappeared in step 2 — WebGPU
+//      pipeline creation fails silently with a location-mismatch
+//      validation error.
+//   5. Re-run from (1) until the live-input set stops changing
 //      (composed pipelines may have a vertex output that *was* read
 //      by an interior fragment that we just dropped).
 //
@@ -56,12 +64,39 @@ function pruneOnce(module: Module): PruneResult {
   const liveInputs = collectLiveInputs(module);
   let changed = false;
   const newValues = module.values.map((v) => {
-    if (v.kind !== "Entry" || v.entry.stage !== "vertex") return v;
-    const pruned = pruneVertex(v.entry, liveInputs);
-    if (pruned !== v.entry) changed = true;
-    return { ...v, entry: pruned };
+    if (v.kind !== "Entry") return v;
+    const e = v.entry;
+    if (e.stage === "vertex") {
+      const pruned = pruneVertex(e, liveInputs);
+      if (pruned !== e) changed = true;
+      return { ...v, entry: pruned };
+    }
+    if (e.stage === "fragment") {
+      const pruned = pruneFragmentInputs(e, liveInputs);
+      if (pruned !== e) changed = true;
+      return { ...v, entry: pruned };
+    }
+    return v;
   });
   return { module: changed ? { ...module, values: newValues } : module, changed };
+}
+
+/**
+ * Drop fragment-stage `inputs` declarations whose names the body
+ * doesn't read. Without this the emitted FS struct keeps a
+ * `@location(N)` declaration for a varying that the VS-output side
+ * has been pruned away from in `pruneVertex`, and WebGPU pipeline
+ * creation fails with a silent inter-stage location mismatch.
+ * Builtin inputs (e.g. `position` / `frag_depth`) stay regardless —
+ * they're supplied by the pipeline, not a previous stage.
+ */
+function pruneFragmentInputs(e: EntryDef, live: Set<string>): EntryDef {
+  const keptInputs = e.inputs.filter((p) => {
+    const isBuiltin = p.decorations.some((d) => d.kind === "Builtin");
+    return isBuiltin || live.has(p.name);
+  });
+  if (keptInputs.length === e.inputs.length) return e;
+  return { ...e, inputs: keptInputs };
 }
 
 /**
