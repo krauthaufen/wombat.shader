@@ -96,10 +96,51 @@ export interface Diagnostic {
 }
 
 export class TranslationError extends Error {
-  constructor(message: string, readonly diagnostics: readonly Diagnostic[]) {
-    super(message);
+  constructor(
+    summary: string,
+    readonly diagnostics: readonly Diagnostic[],
+    /** TS source text — when present, allows line/column resolution
+     *  of `start`/`end` character offsets in formatted messages. */
+    readonly sourceText?: string,
+  ) {
+    super(formatTranslationError(summary, diagnostics, sourceText));
     this.name = "TranslationError";
   }
+}
+
+function formatTranslationError(
+  summary: string,
+  diagnostics: readonly Diagnostic[],
+  sourceText?: string,
+): string {
+  if (diagnostics.length === 0) return summary;
+  const lines = [summary];
+  for (const d of diagnostics) {
+    const loc = d.file !== undefined && d.start !== undefined
+      ? `${d.file}:${offsetToLineCol(sourceText, d.start)}`
+      : (d.file ?? "<unknown>");
+    lines.push(`  ${loc}: ${d.message}`);
+    if (sourceText !== undefined && d.start !== undefined && d.end !== undefined) {
+      const span = sourceText.slice(d.start, Math.min(d.end, d.start + 200));
+      const oneLine = span.replace(/\s+/g, " ").trim();
+      if (oneLine.length > 0) lines.push(`    > ${oneLine}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function offsetToLineCol(sourceText: string | undefined, offset: number): string {
+  if (sourceText === undefined) return `offset ${offset}`;
+  let line = 1;
+  let lastNewline = -1;
+  for (let i = 0; i < offset && i < sourceText.length; i++) {
+    if (sourceText.charCodeAt(i) === 10) {
+      line++;
+      lastNewline = i;
+    }
+  }
+  const col = offset - lastNewline;
+  return `${line}:${col}`;
 }
 
 interface Ctx {
@@ -217,6 +258,7 @@ export function translateFunction(
     throw new TranslationError(
       `${ctx.diagnostics.length} translation diagnostic(s) for "${fnName}"`,
       ctx.diagnostics,
+      source.text,
     );
   }
   return { body, parameters: params, returnType };
