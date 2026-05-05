@@ -12,6 +12,10 @@
     "skipLibCheck": true,
     "plugins": [
       {
+        "transform": "@boperators/plugin-tsc",
+        "transformProgram": true
+      },
+      {
         "name": "@boperators/plugin-ts-language-server"
       }
     ]
