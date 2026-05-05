@@ -132,4 +132,62 @@ describe("liftReturns + compile pipeline", () => {
     expect(vs).toContain("v_color = a_color;");
     expect(fs).toContain("outColor = vec4(");
   });
+
+  describe("imperative early-return", () => {
+    const earlyReturnSource = `
+      function fsMain(input: { v_color: V4f }): { outColor: V4f } {
+        if (input.v_color.w < 0.5) {
+          return { outColor: new V4f(0.0, 0.0, 0.0, 1.0) };
+        }
+        return { outColor: input.v_color };
+      }
+    `;
+    const fsEntry = {
+      name: "fsMain", stage: "fragment" as const,
+      outputs: [{
+        name: "outColor",
+        type: { kind: "Vector" as const, element: { kind: "Float" as const, width: 32 }, dim: 4 },
+        semantic: "Color",
+        decorations: [{ kind: "Location" as const, value: 0 }],
+      }],
+    };
+
+    it("WGSL: early `return { … }` inside `if` actually exits the entry", () => {
+      const r = compileShaderSource(earlyReturnSource, [fsEntry], { target: "wgsl" });
+      const fs = r.stages[0]!.source;
+      // Before the fix, the early-exit silently fell through to the
+      // tail write, so the conditional black colour was always
+      // overwritten. Now we expect a `return out;` inside the if.
+      const ifIdx = fs.indexOf("if (");
+      const endIfIdx = fs.indexOf("}", ifIdx);
+      expect(ifIdx).toBeGreaterThanOrEqual(0);
+      const ifBlock = fs.slice(ifIdx, endIfIdx);
+      expect(ifBlock).toContain("return out;");
+    });
+
+    it("GLSL: same early-return path emits a bare `return;` inside the branch", () => {
+      const r = compileShaderSource(earlyReturnSource, [fsEntry], { target: "glsl" });
+      const fs = r.stages[0]!.source;
+      const ifIdx = fs.indexOf("if (");
+      const endIfIdx = fs.indexOf("}", ifIdx);
+      const ifBlock = fs.slice(ifIdx, endIfIdx);
+      expect(ifBlock).toContain("return;");
+    });
+
+    it("tail return at the natural end emits NO duplicate `return out;`", () => {
+      // The tail write doesn't get a Return — emitEntryFunction's
+      // synth handles it. We assert the entry function body has
+      // exactly one `return out;` (synthesized at the end), not two
+      // adjacent ones from the lifted tail + synth.
+      const tailOnlySource = `
+        function fsMain(input: { v_color: V4f }): { outColor: V4f } {
+          return { outColor: input.v_color };
+        }
+      `;
+      const r = compileShaderSource(tailOnlySource, [fsEntry], { target: "wgsl" });
+      const fs = r.stages[0]!.source;
+      const matches = fs.match(/return out;/g) ?? [];
+      expect(matches.length).toBe(1);
+    });
+  });
 });

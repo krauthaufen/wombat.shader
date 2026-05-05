@@ -141,6 +141,7 @@ export function emitWgsl(module: Module, entryName?: string): EmitResult {
     out: w,
     structs: new Set(),
     bindings: { inputs: [], outputs: [], uniforms: [], samplers: [], storage: [] },
+    entryOutStruct: undefined,
   };
   // Build name → buffer-struct map so `expr()` knows that a
   // ReadInput("Uniform", "u_camera_view") whose decl has buffer:"Camera"
@@ -212,6 +213,14 @@ interface Ctx {
   readonly out: Writer;
   readonly structs: Set<string>;
   readonly bindings: MutableBindings;
+  /**
+   * Mutated by `emitEntryFunction` while emitting an entry body whose
+   * return type is a synthesized output struct. When set, a bare
+   * `Return` Stmt emits `return out;` (the synth output) instead of
+   * `return;` — letting `liftReturns`'s lifted early-exit returns
+   * actually compile.
+   */
+  entryOutStruct: string | undefined;
 }
 
 interface EntryIO {
@@ -545,12 +554,39 @@ function emitEntryFunction(ctx: Ctx, e: EntryDef, io: EntryIO): void {
   if (io.hasOutputStruct && io.outputStructName) {
     ctx.out.line(`var out: ${io.outputStructName};`);
   }
+  // Tell the Stmt emitter that a bare `Return` inside this entry's
+  // body should be emitted as `return out;` (the synth output struct).
+  // `liftReturns` produces these for non-tail early-exits; without
+  // this rewrite we'd emit `return;` and WGSL would reject the
+  // type mismatch (function returns a struct but `return;` doesn't).
+  const prevReturn = ctx.entryOutStruct;
+  ctx.entryOutStruct = io.hasOutputStruct ? io.outputStructName : undefined;
   emitStmt(ctx, e.body);
-  if (io.hasOutputStruct && io.outputStructName) {
+  ctx.entryOutStruct = prevReturn;
+  // Synth tail return — only when the body doesn't already end with
+  // a Return (which it does iff `liftReturns` wrapped it in one;
+  // we strip that trailing Return there for tail-position writes,
+  // but defensively still detect to avoid emitting unreachable code).
+  if (io.hasOutputStruct && io.outputStructName && !endsWithReturn(e.body)) {
     ctx.out.line("return out;");
   }
   ctx.out.dec();
   ctx.out.line("}");
+}
+
+function endsWithReturn(s: Stmt): boolean {
+  switch (s.kind) {
+    case "Return":
+    case "ReturnValue":
+      return true;
+    case "Sequential":
+    case "Isolated": {
+      const last = s.body[s.body.length - 1];
+      return last !== undefined && endsWithReturn(last);
+    }
+    default:
+      return false;
+  }
 }
 
 function capitalise(s: string): string {
@@ -610,7 +646,12 @@ function emitStmt(ctx: Ctx, s: Stmt): void {
       for (const c of s.body) emitStmt(ctx, c);
       return;
     case "Return":
-      ctx.out.line("return;");
+      // Inside an entry whose return type is a synth output struct, a
+      // bare `Return` Stmt has to surface the struct — the function
+      // can't return void. `liftReturns` emits these for non-tail
+      // early-exit returns; the entry emitter sets `entryOutStruct`
+      // while emitting the body so we know the surrounding context.
+      ctx.out.line(ctx.entryOutStruct ? "return out;" : "return;");
       return;
     case "ReturnValue":
       ctx.out.line(`return ${expr(s.value)};`);

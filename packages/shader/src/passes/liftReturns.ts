@@ -62,13 +62,23 @@ export function liftReturns(module: Module, _options: LiftReturnsOptions = {}): 
 
 function liftEntry(entry: EntryDef): EntryDef {
   // Walk the body; whenever a `ReturnValue` carries a recognised
-  // record-shaped expression, replace with WriteOutputs + Return.
+  // record-shaped expression, replace with WriteOutputs + a bare
+  // `Return` so the function actually exits at that point.
   const transformed = mapStmt(entry.body, {
     stmt: (s) => liftStmt(s, entry),
   });
   // Apply the transform at the root too, since mapStmt only walks
   // nested children.
-  return { ...entry, body: liftStmt(transformed, entry) };
+  let body = liftStmt(transformed, entry);
+  // The lifter unconditionally appends `Return` after every lifted
+  // ReturnValue. The natural tail return is then redundant — the
+  // entry's WGSL emitter synthesises `return out;` when the body
+  // doesn't already end in a `Return`. Strip the trailing one so we
+  // emit a clean tail (and so adjacent passes that look at "what
+  // does this body end with" see a fall-through, matching what they
+  // saw before this fix).
+  body = stripTrailingReturn(body);
+  return { ...entry, body };
 }
 
 function liftStmt(s: Stmt, entry: EntryDef): Stmt {
@@ -98,7 +108,11 @@ function tryLiftReturn(value: Expr, entry: EntryDef, span: import("../ir/index.j
       });
     }
     if (writes.length === 0) return undefined;
-    return { kind: "Sequential", body: writes, ...(span !== undefined ? { span } : {}) };
+    return {
+      kind: "Sequential",
+      body: [...writes, { kind: "Return", ...(span !== undefined ? { span } : {}) }],
+      ...(span !== undefined ? { span } : {}),
+    };
   }
   // Pattern B: bare-value return (`return new V4f(...)`).
   //
@@ -116,14 +130,40 @@ function tryLiftReturn(value: Expr, entry: EntryDef, span: import("../ir/index.j
     const target = entry.outputs[0]!;
     return {
       kind: "Sequential",
-      body: [{
-        kind: "WriteOutput",
-        name: target.name,
-        value: { kind: "Expr", value, ...(span !== undefined ? { span } : {}) },
-        ...(span !== undefined ? { span } : {}),
-      }],
+      body: [
+        {
+          kind: "WriteOutput",
+          name: target.name,
+          value: { kind: "Expr", value, ...(span !== undefined ? { span } : {}) },
+          ...(span !== undefined ? { span } : {}),
+        },
+        { kind: "Return", ...(span !== undefined ? { span } : {}) },
+      ],
       ...(span !== undefined ? { span } : {}),
     };
   }
   return undefined;
+}
+
+/**
+ * Remove a trailing `Return` from the very tail of an entry body.
+ * Recurses into the last child of nested `Sequential` blocks; stops
+ * the moment it sees a control-flow node (If/For/etc.) so a
+ * conditional early-exit's `Return` is preserved.
+ */
+function stripTrailingReturn(s: Stmt): Stmt {
+  if (s.kind === "Return") return { kind: "Nop" };
+  if (s.kind === "Sequential" || s.kind === "Isolated") {
+    if (s.body.length === 0) return s;
+    const last = s.body[s.body.length - 1]!;
+    const stripped = stripTrailingReturn(last);
+    if (stripped === last) return s;
+    const filtered = stripped.kind === "Nop"
+      ? s.body.slice(0, -1)
+      : [...s.body.slice(0, -1), stripped];
+    if (filtered.length === 0) return { kind: "Nop" };
+    if (filtered.length === 1 && s.kind === "Sequential") return filtered[0]!;
+    return { ...s, body: filtered };
+  }
+  return s;
 }

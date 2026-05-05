@@ -79,6 +79,29 @@ function fusePair(a: EntryDef, b: EntryDef): EntryDef {
   if (a.stage !== b.stage) {
     throw new Error(`composeStages: stages must match (got ${a.stage} + ${b.stage})`);
   }
+  // Same-stage fusion concatenates A's body before B's body. After
+  // `liftReturns`, an effect that uses imperative early-return
+  // (`if (cond) return { … };`) has those `Return` Stmts inlined in
+  // the body — fusing would let A's early-return short-circuit B,
+  // which is wrong. The planned fix is helper extraction (each effect
+  // becomes its own `fn` with a native `return;` exiting only that
+  // helper, then the entry calls them in sequence). Until that lands,
+  // detect the conflict and surface a clear error rather than emitting
+  // silently-wrong WGSL.
+  if (containsReturn(a.body)) {
+    throw new Error(
+      `composeStages: ${a.stage} effect "${a.name}" has imperative early-returns; ` +
+      `same-stage composition with early-returns is not yet supported (helper extraction pending). ` +
+      `Move the conditional logic outside the effect, or compose only with effects of the other stage.`,
+    );
+  }
+  if (containsReturn(b.body)) {
+    throw new Error(
+      `composeStages: ${b.stage} effect "${b.name}" has imperative early-returns; ` +
+      `same-stage composition with early-returns is not yet supported (helper extraction pending). ` +
+      `Move the conditional logic outside the effect, or compose only with effects of the other stage.`,
+    );
+  }
 
   // A carrier is created for every `a` output that `b` *actually reads*
   // via a `ReadInput("Input", name)` somewhere in its body. We scan the
@@ -181,6 +204,28 @@ function redirectPipedWrites(s: Stmt, carriers: Map<string, Var>): Stmt {
     return child;
   };
   return transform(mapStmt(s, { stmt: transform }));
+}
+
+function containsReturn(s: Stmt): boolean {
+  if (s.kind === "Return" || s.kind === "ReturnValue") return true;
+  switch (s.kind) {
+    case "Sequential":
+    case "Isolated":
+      return s.body.some(containsReturn);
+    case "If":
+      return containsReturn(s.then) || (s.else !== undefined && containsReturn(s.else));
+    case "For":
+      return containsReturn(s.init) || containsReturn(s.step) || containsReturn(s.body);
+    case "While":
+    case "DoWhile":
+    case "Loop":
+      return containsReturn(s.body);
+    case "Switch":
+      return s.cases.some((c) => containsReturn(c.body))
+        || (s.default !== undefined && containsReturn(s.default));
+    default:
+      return false;
+  }
 }
 
 function rExprToExpr(r: { kind: "Expr"; value: Expr } | { kind: "ArrayLiteral"; arrayType: import("../ir/index.js").Type; values: readonly Expr[] }): Expr {
