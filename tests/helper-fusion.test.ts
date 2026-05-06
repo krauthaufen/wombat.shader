@@ -441,6 +441,95 @@ describe("composeStages: wrapper inputs reflect actual reads, not declared input
   });
 });
 
+// ─── intrinsics + discard inside extracted helpers ─────────────────
+
+describe("extracted helpers: intrinsics + discard work end-to-end", () => {
+  // Two fragments composed: A normalises a normal, computes a Lambert
+  // term using `dot`/`abs`, `discard`s near-grazing fragments, and
+  // tints the surviving Colors. B applies a simple `pow`/`max` tone
+  // map. Exercises every commonly-needed intrinsic AND a fragment-
+  // stage `discard` inside an extracted helper.
+  const sourceLighting = `
+    function fragLambert(input: { Normals: V3f; Colors: V4f }): { Colors: V4f } {
+      const n = normalize(input.Normals);
+      const lit = abs(n.dot(new V3f(0.0, 0.0, 1.0)));
+      if (lit < 0.05) { discard; }
+      return { Colors: new V4f(input.Colors.x * lit, input.Colors.y * lit, input.Colors.z * lit, input.Colors.w) };
+    }
+    function fragTonemap(input: { Colors: V4f }): { outColor: V4f } {
+      const c = input.Colors;
+      const tone = pow(max(c.x, max(c.y, c.z)), 0.45);
+      return { outColor: new V4f(c.x * tone, c.y * tone, c.z * tone, c.w) };
+    }
+  `;
+  const entries = [
+    {
+      name: "fragLambert", stage: "fragment" as const,
+      inputs: [
+        { name: "Normals", type: Tvec3f, semantic: "Normals", decorations: [{ kind: "Location" as const, value: 0 }] },
+        { name: "Colors", type: Tvec4f, semantic: "Colors", decorations: [{ kind: "Location" as const, value: 1 }] },
+      ],
+      outputs: [
+        { name: "Colors", type: Tvec4f, semantic: "Colors", decorations: [{ kind: "Location" as const, value: 1 }] },
+      ],
+    },
+    {
+      name: "fragTonemap", stage: "fragment" as const,
+      inputs: [{ name: "Colors", type: Tvec4f, semantic: "Colors", decorations: [{ kind: "Location" as const, value: 1 }] }],
+      outputs: [{ name: "outColor", type: Tvec4f, semantic: "Color", decorations: [{ kind: "Location" as const, value: 0 }] }],
+    },
+  ];
+
+  it("WGSL emits every intrinsic + `discard` inside the helper Function", () => {
+    const r = compileShaderSource(sourceLighting, entries, { target: "wgsl" });
+    const src = r.stages[0]!.source;
+    // Intrinsics — emitted by name in WGSL.
+    expect(src).toMatch(/normalize\(/);
+    expect(src).toMatch(/dot\(/);
+    expect(src).toMatch(/abs\(/);
+    expect(src).toMatch(/pow\(/);
+    expect(src).toMatch(/max\(/);
+    // `discard;` survives extraction, sits inside the lambert helper.
+    expect(src).toContain("discard;");
+    // The helper Function's `discard` precedes `return out;` (the
+    // lambert helper's tail), proving the discard is inside the
+    // extracted body, not the entry's main.
+    const helperBlockStart = src.indexOf("fn _fragLambert_fragTonemap_fragLambert_0");
+    expect(helperBlockStart).toBeGreaterThanOrEqual(0);
+    const helperBlockEnd = src.indexOf("\n}\n", helperBlockStart);
+    const helperBlock = src.slice(helperBlockStart, helperBlockEnd);
+    expect(helperBlock).toContain("discard;");
+    expect(helperBlock).toContain("normalize(");
+  });
+
+  it("GLSL emits intrinsics + discard inside helpers, and avoids the `out` reserved word", () => {
+    const r = compileShaderSource(sourceLighting, entries, { target: "glsl" });
+    const src = r.stages[0]!.source;
+    expect(src).toMatch(/normalize\(/);
+    expect(src).toMatch(/dot\(/);
+    expect(src).toMatch(/abs\(/);
+    expect(src).toMatch(/pow\(/);
+    expect(src).toMatch(/max\(/);
+    expect(src).toContain("discard;");
+    // GLSL reserves `out` as a parameter qualifier — extracted
+    // helpers must use a non-reserved local name (`_out_`).
+    expect(src).not.toMatch(/^\s*FragA_fragBState out =/m);
+    expect(src).toMatch(/_out_\s*=\s*s_in/);
+    // The merged-state struct holds every port across all helpers.
+    expect(src).toContain("struct ");
+    expect(src).toContain("Normals;");
+    expect(src).toContain("outColor;");
+  });
+
+  it("`discard` survives the cross-helper liveness DCE (a downstream live read keeps the discarding helper alive)", () => {
+    // Same source as above. tonemap reads Colors, which lambert
+    // writes — so lambert's body is live, including its `discard`.
+    const r = compileShaderSource(sourceLighting, entries, { target: "wgsl" });
+    const src = r.stages[0]!.source;
+    expect(src).toContain("discard;");
+  });
+});
+
 // ─── full-pipeline integration ─────────────────────────────────────
 
 describe("compileShaderSource end-to-end with imperative early-return", () => {

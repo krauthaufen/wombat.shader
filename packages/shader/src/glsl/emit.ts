@@ -62,12 +62,19 @@ export interface BackendMeta {
 // Public entry point
 // ─────────────────────────────────────────────────────────────────────
 
+// Module-global ref to the current Ctx so the free `expr` / `lexpr`
+// functions can resolve `ReadInput("Input", …)` / `WriteOutput` /
+// `Return` against whichever helper-vs-entry mode the caller set up.
+let currentCtx: Ctx | undefined;
+
 export function emitGlsl(module: Module, entryName?: string): EmitResult {
   const entry = pickEntry(module, entryName);
   const w = new Writer();
   const ctx: Ctx = {
     out: w,
     structs: new Set(),
+    outLocal: undefined,
+    inputVarName: undefined,
     bindings: {
       inputs: [],
       outputs: [],
@@ -76,6 +83,7 @@ export function emitGlsl(module: Module, entryName?: string): EmitResult {
     },
   };
 
+  currentCtx = ctx;
   w.line("#version 300 es");
   if (entry.stage === "fragment") w.line("precision highp float;");
   if (entry.stage === "vertex") w.line("precision highp float;");
@@ -101,7 +109,7 @@ export function emitGlsl(module: Module, entryName?: string): EmitResult {
 
   // User functions — emit any FunctionDef preceding `main`.
   for (const v of module.values) {
-    if (v.kind === "Function") emitFunction(ctx, v.signature, v.body);
+    if (v.kind === "Function") emitFunction(ctx, v.signature, v.body, v.attributes);
   }
 
   // Emit `void main()` from the entry's body.
@@ -134,6 +142,24 @@ interface Ctx {
   readonly out: Writer;
   readonly structs: Set<string>;
   readonly bindings: MutableBindings;
+  /**
+   * When set, a bare `Return` Stmt emits `return <outLocal>;` and
+   * `WriteOutput(X)` targets `<outLocal>.X` instead of the
+   * module-level `X`. Set while emitting `merged_state_helper`
+   * Function bodies — the helper body uses the same `WriteOutput` /
+   * `ReadInput("Input", X)` IR as an entry would, but rewires
+   * everything onto the merged-state local. Unset (`undefined`)
+   * during entry emit, where outputs go to module-level `out`-decl
+   * GLSL globals.
+   */
+  outLocal: string | undefined;
+  /**
+   * Where `ReadInput("Input", X)` reads when set. Default unset →
+   * module-level `X`. Helpers set this to their local `out`, so
+   * upstream-helper writes are visible (the read targets
+   * `out.X`).
+   */
+  inputVarName: string | undefined;
 }
 
 function pickEntry(module: Module, entryName?: string): EntryDef {
@@ -280,16 +306,63 @@ function emitFunction(
   ctx: Ctx,
   sig: { name: string; returnType: Type; parameters: readonly { name: string; type: Type; modifier: "in" | "inout" }[] },
   body: Stmt,
+  attributes: readonly import("../ir/index.js").FnAttr[] | undefined,
 ): void {
   const params = sig.parameters
     .map((p) => `${p.modifier === "inout" ? "inout " : ""}${typeStr(p.type)} ${p.name}`)
     .join(", ");
   ctx.out.line(`${typeStr(sig.returnType)} ${sig.name}(${params}) {`);
   ctx.out.inc();
-  emitStmt(ctx, body);
+
+  const isMergedHelper = attributes?.includes("merged_state_helper") ?? false;
+  // GLSL reserves `out` as a parameter qualifier; we can't use it as
+  // a local variable name. Use `_out_` for the helper-state local —
+  // safe in both GLSL ES 3.00 and WGSL.
+  const HELPER_LOCAL = "_out_";
+  if (isMergedHelper) {
+    const stateParam = sig.parameters[0];
+    if (!stateParam) {
+      throw new Error(`emitGlsl: merged_state_helper "${sig.name}" needs at least one parameter`);
+    }
+    ctx.out.line(`${typeStr(sig.returnType)} ${HELPER_LOCAL} = ${stateParam.name};`);
+    const prevOutLocal = ctx.outLocal;
+    const prevInputVar = ctx.inputVarName;
+    (ctx as { outLocal: string | undefined }).outLocal = HELPER_LOCAL;
+    (ctx as { inputVarName: string | undefined }).inputVarName = HELPER_LOCAL;
+    emitStmt(ctx, body);
+    (ctx as { outLocal: string | undefined }).outLocal = prevOutLocal;
+    (ctx as { inputVarName: string | undefined }).inputVarName = prevInputVar;
+    if (!endsWithReturn(body)) ctx.out.line(`return ${HELPER_LOCAL};`);
+  } else if (sig.returnType.kind === "Struct") {
+    // Plain struct-returning function — fill the helper local, return it.
+    ctx.out.line(`${typeStr(sig.returnType)} ${HELPER_LOCAL};`);
+    const prevOutLocal = ctx.outLocal;
+    (ctx as { outLocal: string | undefined }).outLocal = HELPER_LOCAL;
+    emitStmt(ctx, body);
+    (ctx as { outLocal: string | undefined }).outLocal = prevOutLocal;
+    if (!endsWithReturn(body)) ctx.out.line(`return ${HELPER_LOCAL};`);
+  } else {
+    emitStmt(ctx, body);
+  }
+
   ctx.out.dec();
   ctx.out.line("}");
   ctx.out.blank();
+}
+
+function endsWithReturn(s: Stmt): boolean {
+  switch (s.kind) {
+    case "Return":
+    case "ReturnValue":
+      return true;
+    case "Sequential":
+    case "Isolated": {
+      const last = s.body[s.body.length - 1];
+      return last !== undefined && endsWithReturn(last);
+    }
+    default:
+      return false;
+  }
 }
 
 function emitEntryMain(ctx: Ctx, e: EntryDef): void {
@@ -322,7 +395,8 @@ function emitStmt(ctx: Ctx, s: Stmt): void {
       return;
     case "WriteOutput": {
       const idx = s.index ? `[${expr(s.index)}]` : "";
-      ctx.out.line(`${s.name}${idx} = ${rexpr(s.value)};`);
+      const target = ctx.outLocal ? `${ctx.outLocal}.${s.name}` : s.name;
+      ctx.out.line(`${target}${idx} = ${rexpr(s.value)};`);
       return;
     }
     case "Increment":
@@ -336,7 +410,7 @@ function emitStmt(ctx: Ctx, s: Stmt): void {
       for (const c of s.body) emitStmt(ctx, c);
       return;
     case "Return":
-      ctx.out.line("return;");
+      ctx.out.line(ctx.outLocal ? `return ${ctx.outLocal};` : "return;");
       return;
     case "ReturnValue":
       ctx.out.line(`return ${expr(s.value)};`);
@@ -462,8 +536,15 @@ export function expr(e: Expr): string {
       return varRef(e.var);
     case "Const":
       return literal(e.value);
-    case "ReadInput":
-      return e.index !== undefined ? `${e.name}[${expr(e.index)}]` : e.name;
+    case "ReadInput": {
+      // Inside a `merged_state_helper`, Input reads target the
+      // helper's local state struct (`out.X`). Outside, GLSL reads
+      // the module-level `in X;` global, so a bare `X` is correct.
+      const base = (e.scope === "Input" && currentCtx?.inputVarName)
+        ? `${currentCtx.inputVarName}.${e.name}`
+        : e.name;
+      return e.index !== undefined ? `${base}[${expr(e.index)}]` : base;
+    }
     case "Call":
       return `${e.fn.signature.name}(${e.args.map(expr).join(", ")})`;
     case "CallIntrinsic":
@@ -578,8 +659,14 @@ export function lexpr(l: LExpr): string {
       return `${lexpr(l.target)}.${l.comps.join("")}`;
     case "LMatrixElement":
       return `${lexpr(l.matrix)}[${expr(l.col)}][${expr(l.row)}]`;
-    case "LInput":
-      return l.index !== undefined ? `${l.name}[${expr(l.index)}]` : l.name;
+    case "LInput": {
+      const base = (l.scope === "Input" && currentCtx?.inputVarName)
+        ? `${currentCtx.inputVarName}.${l.name}`
+        : (l.scope === "Output" && currentCtx?.outLocal)
+          ? `${currentCtx.outLocal}.${l.name}`
+          : l.name;
+      return l.index !== undefined ? `${base}[${expr(l.index)}]` : base;
+    }
   }
 }
 
