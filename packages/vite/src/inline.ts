@@ -456,7 +456,16 @@ function classifyFreeIdentifier(
   moduleConsts: ReadonlyMap<string, ModuleConst>,
 ): Classification {
   if (checker) {
-    const sym = checker.getSymbolAtLocation(useNode);
+    let sym = checker.getSymbolAtLocation(useNode);
+    // Follow import aliases — `import { uniform } from
+    // "@aardworx/wombat.shader/uniforms"` resolves to an alias
+    // symbol whose declarations point at the import binding, not
+    // the underlying ambient `declare const`. Without the unwrap,
+    // `isAmbientDeclaration` returns false and the classifier
+    // mistakes a uniform for a closure capture.
+    if (sym && (sym.flags & ts.SymbolFlags.Alias) !== 0) {
+      sym = checker.getAliasedSymbol(sym);
+    }
     if (sym) {
       const tsType = checker.getTypeOfSymbolAtLocation(sym, useNode);
       // `Storage<T, A>` capture → storage-buffer binding. The
@@ -480,7 +489,15 @@ function classifyFreeIdentifier(
         if (inner) return { kind: "uniform-aval", type: inner };
         return { kind: "unresolved" };
       }
-      const ambient = isAmbientDeclaration(sym);
+      // Recognise the standard `uniform` namespace from
+      // `@aardworx/wombat.shader/uniforms` even though its
+      // declaration isn't ambient (it ships a runtime Proxy stub
+      // for friendly errors when accessed outside a marker). The
+      // type symbol's declaration sits in the package's `.d.ts`,
+      // so we treat its members as a uniform namespace regardless
+      // of `declare`-modifier presence.
+      const fromUniformsPkg = symbolFromUniformsPackage(sym);
+      const ambient = isAmbientDeclaration(sym) || fromUniformsPkg;
       if (ambient) {
         // Object-typed ambient → uniform namespace.
         const ir = tsTypeToIR(tsType, checker);
@@ -1193,6 +1210,29 @@ function validateBuiltinSlot(
   }
   const legal = slots.map((s) => `${s.stage}-${s.direction}`).join(", ");
   return `@builtin(${builtin}) not allowed on ${stage}-${direction}; legal slots: ${legal}`;
+}
+
+/**
+ * True iff `sym` was declared inside the
+ * `@aardworx/wombat.shader/uniforms` package (the canonical
+ * `uniform` namespace + the `UniformScope` interface). The
+ * package ships its declarations in a normal `.ts` source file
+ * (so it has a runtime Proxy stub for friendly errors when
+ * users touch `uniform.X` outside a marker); the file path is
+ * what tells us this is the wombat.shader uniforms namespace
+ * versus an unrelated user identifier called `uniform`.
+ */
+function symbolFromUniformsPackage(sym: ts.Symbol): boolean {
+  const decls = sym.declarations ?? [];
+  for (const d of decls) {
+    const file = d.getSourceFile().fileName;
+    if (file.includes("/wombat.shader/") && file.endsWith("/uniforms/index.ts")) return true;
+    if (file.includes("/wombat.shader/") && file.endsWith("/uniforms/index.d.ts")) return true;
+    // Workspace-resolved variants where the package is symlinked
+    // / the dist path is present.
+    if (file.endsWith("/uniforms/index.js")) return true;
+  }
+  return false;
 }
 
 function safeExtractEntryParams(

@@ -36,6 +36,10 @@
       "types": "./dist/types/index.d.ts",
       "import": "./dist/types/index.js"
     },
+    "./uniforms": {
+      "types": "./dist/uniforms/index.d.ts",
+      "import": "./dist/uniforms/index.js"
+    },
     "./webgl2": {
       "types": "./dist/runtime/webgl2/index.d.ts",
       "import": "./dist/runtime/webgl2/index.js"
