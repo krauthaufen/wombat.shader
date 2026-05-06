@@ -27,3 +27,4 @@ export * from "./samplers.js";
 export * from "./storage.js";
 export * from "./intrinsics.js";
 export * from "./builtins.js";
+export * from "./semantic.js";
