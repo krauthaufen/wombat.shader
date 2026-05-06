@@ -145,6 +145,60 @@ describe("inline plugin: Semantic / Builtin brand consumption", () => {
     expect(() => transform(src)).toThrowError(/not allowed on vertex-in/);
   });
 
+  it("`Position<V4f>` on a vertex output auto-promotes to @builtin(position)", () => {
+    // No `ClipPosition` needed — the plugin promotes `Position`
+    // semantic to a builtin on (vertex, out).
+    const src = `
+      import { vertex } from "@aardworx/wombat.shader";
+      const vs = vertex((v: { pos: Position<V3f> }): {
+        clip: Position<V4f>;
+      } => ({
+        clip: new V4f(v.pos.x, v.pos.y, v.pos.z, 1.0),
+      }));
+    `;
+    const code = transform(src);
+    const json = templateJson(code);
+    expect(json).toMatch(/"name":"clip"[\s\S]*?"decorations":\[\{"kind":"Builtin","value":"position"\}\]/);
+  });
+
+  it("`Position<V4f>` on a fragment INPUT stays a Location-decorated varying — NOT @builtin(position)", () => {
+    // The GPU's @builtin(position) on FS is screen-space pixel
+    // coords (gl_FragCoord), which isn't what users mean by
+    // `Position`. Per the FShade convention, FS Position input
+    // gets the interpolated clip-space position as a regular
+    // varying (passed through from the VS by the auto-pass-
+    // through pass). Users who want the literal pixel-coord slot
+    // spell it `FragCoord` (a `Builtin` brand) — see the test
+    // above.
+    const src = `
+      import { fragment } from "@aardworx/wombat.shader";
+      const fs = fragment((input: { pos: Position<V4f>; tint: Color }) => ({
+        outColor: input.tint,
+      }));
+    `;
+    const code = transform(src);
+    const json = templateJson(code);
+    expect(json).toMatch(/"name":"pos"[\s\S]*?"semantic":"Positions"[\s\S]*?"decorations":\[\{"kind":"Location"/);
+  });
+
+  it("`Position<V3f>` on a vertex INPUT stays a vertex attribute (Location, not builtin)", () => {
+    // Auto-promotion ONLY fires on (vertex, out) and (fragment, in).
+    // Vertex input keeps its Location decoration.
+    const src = `
+      import { vertex } from "@aardworx/wombat.shader";
+      const vs = vertex((v: { pos: Position<V3f> }): { clip: V4f } => ({
+        clip: new V4f(v.pos.x, v.pos.y, v.pos.z, 1.0),
+      }));
+    `;
+    const code = transform(src);
+    const json = templateJson(code);
+    // Input `pos` is a vertex attribute → Location-decorated.
+    expect(json).toMatch(/"name":"pos"[\s\S]*?"decorations":\[\{"kind":"Location","value":0\}\]/);
+    // Semantic stays "Positions" so the runtime can match the
+    // attribute slot regardless of field name.
+    expect(json).toMatch(/"name":"pos"[\s\S]*?"semantic":"Positions"/);
+  });
+
   it("rejects FragDepth on a vertex output (wrong direction)", () => {
     const src = `
       import { vertex } from "@aardworx/wombat.shader";

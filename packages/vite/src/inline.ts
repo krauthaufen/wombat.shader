@@ -38,7 +38,7 @@ import {
   type UniformDecl,
   type ValueDef,
 } from "@aardworx/wombat.shader/ir";
-import { BUILTIN_SLOTS } from "@aardworx/wombat.shader/types";
+import { BUILTIN_SLOTS, semanticToBuiltin } from "@aardworx/wombat.shader/types";
 import { TypeResolver } from "./typeResolver.js";
 import {
   isAmbientDeclaration, isAvalType,
@@ -1244,7 +1244,18 @@ function entryParamsFromObjectType(
       decorations.push({ kind: "Builtin", value: brand.builtin as import("@aardworx/wombat.shader/ir").BuiltinSemantic });
       semantic = brand.builtin;
     } else if (brand.semantic !== undefined) {
-      decorations.push({ kind: "Location", value: nextLoc++ });
+      // Some Semantic names are conceptually builtin slots in
+      // certain stage/direction combinations — `Positions` on a
+      // vertex output, `Depth` on a fragment output, etc. Promote
+      // those to `@builtin(K)` so users can spell the friendly
+      // semantic alias instead of switching to a separate
+      // `Builtin` brand.
+      const promoted = semanticToBuiltin(brand.semantic, stage, direction);
+      if (promoted !== undefined) {
+        decorations.push({ kind: "Builtin", value: promoted as import("@aardworx/wombat.shader/ir").BuiltinSemantic });
+      } else {
+        decorations.push({ kind: "Location", value: nextLoc++ });
+      }
       semantic = brand.semantic;
     } else {
       // No brand — fall back to the existing name-based defaults.

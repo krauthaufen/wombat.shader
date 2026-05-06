@@ -80,6 +80,15 @@ export function linkCrossStage(module: Module): Module {
     fromAttr: string;      // VS-input name to read
     semantic: string;
   }> = [];
+  // FShade-style Position auto-passes: copy the same expression
+  // the VS wrote to `@builtin(position)` into a fresh
+  // Location-decorated varying.
+  const positionPassthroughs: Array<{
+    name: string;
+    type: import("../ir/index.js").Type;
+    fromExpr: Expr;
+    semantic: string;
+  }> = [];
 
   const newFsInputs: EntryParameter[] = [];
   for (const fi of fs.inputs) {
@@ -120,10 +129,16 @@ export function linkCrossStage(module: Module): Module {
       continue;
     }
 
-    // 2. No VS output — try VS attribute (only if FS unconditionally reads).
+    // 2. No VS output — try VS attribute (only if FS unconditionally
+    //    reads AND the types match). The attribute path forwards
+    //    `out.X = in.attrX` 1:1, so if the types differ (e.g.
+    //    `Positions` is V3f as a vertex attribute but V4f as the
+    //    inter-stage clip-space varying) we fall through to the
+    //    Position auto-pass below instead of emitting a broken
+    //    V3f→V4f write.
     if (vs && fsReads.has(fi.name)) {
       const attr = vsInputsBySem.get(k);
-      if (attr) {
+      if (attr && sameTypeShallow(attr.type, fi.type)) {
         // Inject pass-through. Cross-stage name = FS input's current name.
         passthroughs.push({
           name: fi.name, type: fi.type, fromAttr: attr.name, semantic: fi.semantic,
@@ -131,6 +146,32 @@ export function linkCrossStage(module: Module): Module {
         // eslint-disable-next-line no-console
         console.warn(
           `linkCrossStage: auto pass-through inserted: VS attribute \`${attr.name}\` -> cross-stage \`${fi.name}\``,
+        );
+        newFsInputs.push(fi);
+        continue;
+      }
+    }
+
+    // 3. FShade-style Position auto-pass: an FS input asking for
+    //    semantic "Positions" doesn't want the GPU's
+    //    `@builtin(position)` (that's screen-space `gl_FragCoord`,
+    //    not the rasteriser-interpolated clip-space the user
+    //    expects). When no upstream VS output writes "Positions"
+    //    as a regular varying but the VS DOES write
+    //    `@builtin(position)`, synthesise an extra Location-
+    //    decorated VS output that copies the same expression — so
+    //    the rasteriser interpolates it as a normal vec4 varying
+    //    and the FS gets clip-space.
+    if (vs && fi.semantic === "Positions" && fsReads.has(fi.name)) {
+      const builtinExpr = findBuiltinPositionExpr(vs.body);
+      if (builtinExpr !== undefined) {
+        positionPassthroughs.push({
+          name: fi.name, type: fi.type, fromExpr: builtinExpr, semantic: fi.semantic,
+        });
+        // eslint-disable-next-line no-console
+        console.warn(
+          `linkCrossStage: auto Position pass-through — VS writes @builtin(position); ` +
+          `synthesising varying \`${fi.name}\` so FS gets clip-space, not gl_FragCoord.`,
         );
         newFsInputs.push(fi);
         continue;
@@ -148,6 +189,9 @@ export function linkCrossStage(module: Module): Module {
   let newVs = vs;
   if (vs && passthroughs.length > 0) {
     newVs = appendPassThroughs(vs, passthroughs);
+  }
+  if (vs && positionPassthroughs.length > 0) {
+    newVs = appendPositionPassThroughs(newVs ?? vs, positionPassthroughs);
   }
 
   // Reassemble the module.
@@ -193,6 +237,87 @@ function renameInputReads(s: Stmt, renames: ReadonlyMap<string, string>): Stmt {
     return l;
   };
   return mapStmt(s, { expr: exprFn, lexpr: lexprFn });
+}
+
+/**
+ * Find the expression the VS writes to its `@builtin(position)`
+ * output. Returns `undefined` if no such write is in the body.
+ * Used by the FShade-style Position auto-pass: we duplicate this
+ * expression into a Location-decorated varying so the FS gets
+ * clip-space, not the rasteriser's screen-space gl_FragCoord.
+ */
+function sameTypeShallow(a: import("../ir/index.js").Type, b: import("../ir/index.js").Type): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "Vector" && b.kind === "Vector") {
+    return a.dim === b.dim && sameTypeShallow(a.element, b.element);
+  }
+  if (a.kind === "Matrix" && b.kind === "Matrix") {
+    return a.rows === b.rows && a.cols === b.cols && sameTypeShallow(a.element, b.element);
+  }
+  if (a.kind === "Float" && b.kind === "Float") return a.width === b.width;
+  if (a.kind === "Int" && b.kind === "Int") return a.signed === b.signed && a.width === b.width;
+  return a.kind === b.kind;
+}
+
+function findBuiltinPositionExpr(body: Stmt): Expr | undefined {
+  let result: Expr | undefined;
+  const walk = (s: Stmt): void => {
+    if (result) return;
+    if (s.kind === "WriteOutput") {
+      // `@builtin(position)` outputs are usually named
+      // `gl_Position` (the historical spelling), `position`, or
+      // (post the DefaultSemantic registry) `Positions` itself
+      // when the user used the `ClipPosition` brand. We accept
+      // any of these.
+      if (s.name === "gl_Position" || s.name === "position" || s.name === "Positions") {
+        if (s.value.kind === "Expr") {
+          result = s.value.value;
+          return;
+        }
+      }
+    }
+    if (s.kind === "Sequential" || s.kind === "Isolated") {
+      for (const c of s.body) walk(c);
+    } else if (s.kind === "If") {
+      walk(s.then);
+      if (s.else) walk(s.else);
+    }
+  };
+  walk(body);
+  return result;
+}
+
+function appendPositionPassThroughs(
+  vs: EntryDef,
+  passes: ReadonlyArray<{ name: string; type: import("../ir/index.js").Type; fromExpr: Expr; semantic: string }>,
+): EntryDef {
+  const stmts: Stmt[] = [];
+  const newOutputs: EntryParameter[] = [...vs.outputs];
+  const existingOut = new Set(vs.outputs.map((o) => o.name));
+  let nextLoc = 0;
+  for (const o of vs.outputs) {
+    for (const d of o.decorations) {
+      if (d.kind === "Location" && d.value >= nextLoc) nextLoc = d.value + 1;
+    }
+  }
+  for (const p of passes) {
+    if (existingOut.has(p.name)) continue;
+    stmts.push({
+      kind: "WriteOutput", name: p.name,
+      value: { kind: "Expr", value: p.fromExpr },
+    });
+    newOutputs.push({
+      name: p.name,
+      type: p.type,
+      semantic: p.semantic,
+      decorations: [{ kind: "Location", value: nextLoc++ }],
+    });
+    existingOut.add(p.name);
+  }
+  const body: Stmt = vs.body.kind === "Sequential"
+    ? { kind: "Sequential", body: [...vs.body.body, ...stmts] }
+    : { kind: "Sequential", body: [vs.body, ...stmts] };
+  return { ...vs, outputs: newOutputs, body };
 }
 
 function appendPassThroughs(

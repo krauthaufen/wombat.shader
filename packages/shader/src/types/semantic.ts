@@ -158,6 +158,20 @@ export type Builtin<T, K extends string> = T & {
 };
 
 // Vertex stage — inputs and outputs.
+//
+// Two ways to spell the clip-space-output / fragment-input
+// position slot, both equivalent:
+//
+//   - `Position<V4f>` (Semantic brand). The plugin auto-promotes
+//     a `"Positions"` semantic to `@builtin(position)` on
+//     `(vertex, out)` and `(fragment, in)` slots — same vocabulary
+//     used everywhere else for vertex attributes.
+//   - `ClipPosition` (Builtin brand). Explicit "this IS a
+//     builtin", no auto-promotion logic in play. Use when you
+//     want the intent visible at the type level.
+//
+// Both compile to `@builtin(position)` in WGSL / `gl_Position`
+// in GLSL.
 /** Vertex-stage clip-space output (`@builtin(position)`). */
 export type ClipPosition<T = V4f> = Builtin<T, "position">;
 export const ClipPosition = <T>(v: T): ClipPosition<T> => v as ClipPosition<T>;
@@ -280,4 +294,45 @@ export function isBuiltinAllowed(
   const slots = BUILTIN_SLOTS[builtin];
   if (slots === undefined) return true;
   return slots.some((s) => s.stage === stage && s.direction === direction);
+}
+
+/**
+ * For semantics that are conceptually GPU-builtin slots in some
+ * `(stage, direction)` combinations, the canonical builtin name
+ * to lower to. Lets users write the friendlier semantic alias
+ * (`Position<V4f>` on a vertex output) and have the plugin
+ * promote it to `@builtin(position)` automatically — same WGSL
+ * as if they'd spelled `ClipPosition` explicitly.
+ *
+ * Lookup key is `${semantic}|${stage}|${direction}`.
+ *
+ * Note: `Positions` on a FRAGMENT INPUT is deliberately NOT in
+ * this map. The GPU's `@builtin(position)` on FS input is
+ * screen-space (pixel coords) — what WGSL/GLSL call `gl_FragCoord`
+ * — which is NOT what a "Positions" semantic conveys. Per the
+ * FShade convention, a fragment effect that asks for `Position`
+ * gets the rasteriser-interpolated clip-space position passed
+ * through as a regular varying from the vertex stage; the
+ * auto-pass-through pass synthesises the VS-side carrier when no
+ * upstream effect already wrote `Positions` as a varying. Users
+ * who want the literal screen-space `gl_FragCoord` slot spell it
+ * `FragCoord` (a `Builtin` brand, no auto-pass).
+ */
+export const SEMANTIC_BUILTIN_MAP: Readonly<Record<string, string>> = {
+  "Positions|vertex|out": "position",
+  "Depth|fragment|out": "frag_depth",
+};
+
+/**
+ * If a `Semantic`-branded field with name `semantic` should
+ * implicitly lower to a `@builtin(K)` decoration on the given
+ * stage/direction, returns `K`. Otherwise undefined (the field
+ * stays Location-decorated).
+ */
+export function semanticToBuiltin(
+  semantic: string,
+  stage: BuiltinStage,
+  direction: BuiltinDirection,
+): string | undefined {
+  return SEMANTIC_BUILTIN_MAP[`${semantic}|${stage}|${direction}`];
 }
