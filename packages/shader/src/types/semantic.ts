@@ -46,23 +46,23 @@
 import type { V2f, V3f, V4f, V3ui } from "@aardworx/wombat.base";
 
 /**
- * Phantom field on `Semantic<T, N>`. `unique symbol` plus the
- * `declare const` (no value) means TS treats it as a brand that's
- * structurally unique, while runtime sees nothing.
- */
-declare const __semantic: unique symbol;
-
-/**
  * Carry a `DefaultSemantic`-style name `N` on top of any value
  * type `T`. Type-only — disappears at emit time.
  *
  * The plugin recognises this brand by walking intersection types
- * looking for a `{ readonly [__semantic]: N }` member with `N` a
- * string-literal type, then treats `N` as the field's semantic
- * name. The underlying `T` becomes the field's IR type.
+ * looking for a property named `__wombat_semantic` whose type is a
+ * string-literal `N`, then treats `N` as the field's semantic
+ * name. The underlying `T` becomes the field's IR type. The
+ * plain-string property name (rather than a `unique symbol` key)
+ * is deliberate: it's reliably discoverable via the TS
+ * type-checker's property iteration, where unique-symbol keys go
+ * through synthetic `__@…` escaped names that are awkward to
+ * match. Users shouldn't read this property at runtime — the
+ * brand is purely a build-time marker — but it's a tolerable
+ * leak in exchange for a much simpler plugin implementation.
  */
 export type Semantic<T, N extends string> = T & {
-  readonly [__semantic]: N;
+  readonly __wombat_semantic: N;
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -79,18 +79,56 @@ export type Semantic<T, N extends string> = T & {
 //   - BiNormal<T = V3f>     — V3f bitangent.
 // ─────────────────────────────────────────────────────────────────────
 
+// Each alias ships as both a type AND a no-op value constructor
+// (TS open declaration merging — type and value share a namespace).
+// The constructor lets users brand an existing value at the value
+// level, e.g.
+//
+//   const p = Position(new V3f(1, 0, 0));   //  : Position<V3f>
+//   const c = Color(new V4f(1, 0, 0, 1));   //  : Color<V4f>
+//
+// Brands erase at runtime — the constructor is just `identity`
+// with a type cast, no allocation or work. Useful when a closure
+// or function-return position needs the brand visible to TS but
+// you only have a plain V*f / number in hand.
+
 export type Position<T = V4f> = Semantic<T, "Positions">;
+export const Position = <T>(v: T): Position<T> => v as Position<T>;
+
 export type WorldPosition<T = V4f> = Semantic<T, "WorldPositions">;
+export const WorldPosition = <T>(v: T): WorldPosition<T> => v as WorldPosition<T>;
+
 export type ViewPosition<T = V3f> = Semantic<T, "ViewPosition">;
+export const ViewPosition = <T>(v: T): ViewPosition<T> => v as ViewPosition<T>;
+
 export type Normal<T = V3f> = Semantic<T, "Normals">;
+export const Normal = <T>(v: T): Normal<T> => v as Normal<T>;
+
 export type ViewNormal<T = V3f> = Semantic<T, "ViewNormal">;
+export const ViewNormal = <T>(v: T): ViewNormal<T> => v as ViewNormal<T>;
+
 export type Tangent<T = V3f> = Semantic<T, "Tangents">;
+export const Tangent = <T>(v: T): Tangent<T> => v as Tangent<T>;
+
 export type BiNormal<T = V3f> = Semantic<T, "BiNormals">;
+export const BiNormal = <T>(v: T): BiNormal<T> => v as BiNormal<T>;
+
 export type DiffuseColorUTangent<T = V3f> = Semantic<T, "DiffuseColorUTangents">;
+export const DiffuseColorUTangent = <T>(v: T): DiffuseColorUTangent<T> =>
+  v as DiffuseColorUTangent<T>;
+
 export type DiffuseColorVTangent<T = V3f> = Semantic<T, "DiffuseColorVTangents">;
+export const DiffuseColorVTangent = <T>(v: T): DiffuseColorVTangent<T> =>
+  v as DiffuseColorVTangent<T>;
+
 export type Color<T = V4f> = Semantic<T, "Colors">;
+export const Color = <T>(v: T): Color<T> => v as Color<T>;
+
 export type Texcoord<T = V2f> = Semantic<T, "DiffuseColorCoordinates">;
+export const Texcoord = <T>(v: T): Texcoord<T> => v as Texcoord<T>;
+
 export type Pick<T = number> = Semantic<T, "Pick">;
+export const Pick = <T>(v: T): Pick<T> => v as Pick<T>;
 
 // ─────────────────────────────────────────────────────────────────────
 // Builtin<T, K> — GPU-provided / GPU-consumed built-in slots.
@@ -115,31 +153,37 @@ export type Pick<T = number> = Semantic<T, "Pick">;
 // at IR-build time, and uses `T` as the underlying value type.
 // ─────────────────────────────────────────────────────────────────────
 
-declare const __builtin: unique symbol;
-
 export type Builtin<T, K extends string> = T & {
-  readonly [__builtin]: K;
+  readonly __wombat_builtin: K;
 };
 
 // Vertex stage — inputs and outputs.
 /** Vertex-stage clip-space output (`@builtin(position)`). */
 export type ClipPosition<T = V4f> = Builtin<T, "position">;
+export const ClipPosition = <T>(v: T): ClipPosition<T> => v as ClipPosition<T>;
 /** Per-vertex index (`@builtin(vertex_index)`, u32). */
 export type VertexIndex<T = number> = Builtin<T, "vertex_index">;
+export const VertexIndex = <T>(v: T): VertexIndex<T> => v as VertexIndex<T>;
 /** Per-instance index (`@builtin(instance_index)`, u32). */
 export type InstanceIndex<T = number> = Builtin<T, "instance_index">;
+export const InstanceIndex = <T>(v: T): InstanceIndex<T> => v as InstanceIndex<T>;
 
 // Fragment stage — inputs and outputs.
 /** Fragment-stage screen-space coord (`@builtin(position)` on FS input, vec4f). */
 export type FragCoord<T = V4f> = Builtin<T, "position">;
+export const FragCoord = <T>(v: T): FragCoord<T> => v as FragCoord<T>;
 /** True for front-facing primitives (`@builtin(front_facing)`, bool). */
 export type FrontFacing<T = boolean> = Builtin<T, "front_facing">;
+export const FrontFacing = <T>(v: T): FrontFacing<T> => v as FrontFacing<T>;
 /** Sample index in MSAA shading (`@builtin(sample_index)`, u32). */
 export type SampleIndex<T = number> = Builtin<T, "sample_index">;
+export const SampleIndex = <T>(v: T): SampleIndex<T> => v as SampleIndex<T>;
 /** Sample mask (in / out) — `@builtin(sample_mask)`, u32. */
 export type SampleMask<T = number> = Builtin<T, "sample_mask">;
+export const SampleMask = <T>(v: T): SampleMask<T> => v as SampleMask<T>;
 /** Custom depth output (`@builtin(frag_depth)`, f32). */
 export type FragDepth<T = number> = Builtin<T, "frag_depth">;
+export const FragDepth = <T>(v: T): FragDepth<T> => v as FragDepth<T>;
 /**
  * Conventional `Depth` output — same `frag_depth` slot as
  * `FragDepth`, kept under the `DefaultSemantic` name so user code
@@ -147,6 +191,7 @@ export type FragDepth<T = number> = Builtin<T, "frag_depth">;
  * plugin treats both as identical at IR time.
  */
 export type Depth<T = number> = Builtin<T, "frag_depth">;
+export const Depth = <T>(v: T): Depth<T> => v as Depth<T>;
 
 // Compute stage builtins. WGSL spec specifies these as `vec3<u32>`,
 // so the defaults use `V3ui` (unsigned 3-component int) — not V3f.
@@ -154,14 +199,20 @@ export type Depth<T = number> = Builtin<T, "frag_depth">;
 // (e.g. plain number tuples for testing harnesses).
 /** Local thread coords inside a workgroup (`@builtin(local_invocation_id)`, vec3<u32>). */
 export type LocalInvocationId<T = V3ui> = Builtin<T, "local_invocation_id">;
+export const LocalInvocationId = <T>(v: T): LocalInvocationId<T> => v as LocalInvocationId<T>;
 /** Linear local index (`@builtin(local_invocation_index)`, u32). */
 export type LocalInvocationIndex<T = number> = Builtin<T, "local_invocation_index">;
+export const LocalInvocationIndex = <T>(v: T): LocalInvocationIndex<T> =>
+  v as LocalInvocationIndex<T>;
 /** Global thread coords (`@builtin(global_invocation_id)`, vec3<u32>). */
 export type GlobalInvocationId<T = V3ui> = Builtin<T, "global_invocation_id">;
+export const GlobalInvocationId = <T>(v: T): GlobalInvocationId<T> => v as GlobalInvocationId<T>;
 /** Workgroup coords (`@builtin(workgroup_id)`, vec3<u32>). */
 export type WorkgroupId<T = V3ui> = Builtin<T, "workgroup_id">;
+export const WorkgroupId = <T>(v: T): WorkgroupId<T> => v as WorkgroupId<T>;
 /** Number of workgroups in the dispatch (`@builtin(num_workgroups)`, vec3<u32>). */
 export type NumWorkgroups<T = V3ui> = Builtin<T, "num_workgroups">;
+export const NumWorkgroups = <T>(v: T): NumWorkgroups<T> => v as NumWorkgroups<T>;
 
 // ─────────────────────────────────────────────────────────────────────
 // Stage-direction registry
