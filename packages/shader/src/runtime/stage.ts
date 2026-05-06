@@ -207,11 +207,15 @@ const NOT_PROCESSED =
  * both is also fine (`vertex<I, O>(...)`); leaving both off is too
  * (full inference from the lambda).
  */
-export function vertex<I, O = unknown>(_fn: (input: I) => O): Effect {
+export function vertex<I, O = unknown>(_fn: (input: I) => O): Effect;
+export function vertex<I, B, O = unknown>(_fn: (input: I, builtins: B) => O): Effect;
+export function vertex(_fn: unknown): Effect {
   throw new Error(NOT_PROCESSED);
 }
 /** See `vertex` — same partial-inference rule for `O`. */
-export function fragment<I, O = unknown>(_fn: (input: I) => O): Effect {
+export function fragment<I, O = unknown>(_fn: (input: I) => O): Effect;
+export function fragment<I, B, O = unknown>(_fn: (input: I, builtins: B) => O): Effect;
+export function fragment(_fn: unknown): Effect {
   throw new Error(NOT_PROCESSED);
 }
 /**
