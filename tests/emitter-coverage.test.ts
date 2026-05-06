@@ -125,6 +125,40 @@ describe("vector emit", () => {
 // ─── unsigned integers / mixed types ─────────────────────────────────
 
 describe("integer types", () => {
+  it("WGSL shift-by-i32 casts the RHS to u32 (spec requires u32 shift amount)", () => {
+    // Regression: `(x0 << 12i)` where both are i32 is a WGSL
+    // validation error — the shift amount must be u32. Emit must
+    // cast the RHS automatically. GLSL is permissive about this
+    // and accepts `i32 << i32` as-is.
+    const x: Var = { name: "x", type: Ti32, mutable: false };
+    const body: Stmt = {
+      kind: "Sequential", body: [
+        { kind: "Declare", var: x, init: { kind: "Expr", value: constI(0) } },
+        {
+          kind: "Declare",
+          var: { name: "y", type: Ti32, mutable: false },
+          init: { kind: "Expr", value: {
+            kind: "ShiftLeft",
+            lhs: { kind: "Var", var: x, type: Ti32 },
+            rhs: { kind: "Const", value: { kind: "Int", signed: true, value: 12 }, type: Ti32 },
+            type: Ti32,
+          } },
+        },
+        {
+          kind: "WriteOutput", name: "outColor",
+          value: { kind: "Expr", value: { kind: "NewVector", components: [constF(0), constF(0), constF(0), constF(1)], type: Tvec4f } },
+        },
+      ],
+    };
+    const mod = moduleWith([{ kind: "Entry", entry: frag(body) }]);
+    const wgsl = emitWgsl(mod).source;
+    // RHS gets a `u32(...)` cast wrapper.
+    expect(wgsl).toMatch(/\(x << u32\(12i\)\)/);
+    // GLSL stays permissive — emits the shift directly.
+    const glsl = emitGlsl(mod).source;
+    expect(glsl).toMatch(/\(x << 12\)/);
+  });
+
   it("u32 literal suffixes differ between backends", () => {
     const x: Var = { name: "x", type: Tu32, mutable: false };
     const body: Stmt = {

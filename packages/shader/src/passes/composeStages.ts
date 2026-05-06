@@ -158,10 +158,10 @@ function _legacyFusePair(a: EntryDef, b: EntryDef): EntryDef {
   //    `b`'s outputs. Iterate B FIRST so name collisions resolve as
   //    B-wins (last-wins ordering — B is downstream).
   const aOutputs = a.outputs.filter((p) => !piped.has(p.name));
-  const mergedOutputs = mergeParams(b.outputs, aOutputs);
+  const mergedOutputs = renumberLocations(mergeParams(b.outputs, aOutputs));
   // Inputs: `a`'s inputs always; `b`'s inputs minus piped names.
   const bInputs = b.inputs.filter((p) => !piped.has(p.name));
-  const mergedInputs = mergeParams(a.inputs, bInputs);
+  const mergedInputs = renumberLocations(mergeParams(a.inputs, bInputs));
 
   const fusedBody: Stmt = dceStmt({
     kind: "Sequential",
@@ -189,6 +189,43 @@ function mergeParams(
     out.push(p);
   }
   return out;
+}
+
+// Each operand assigned its Locations starting from 0, so the merged
+// list almost always has collisions. Walk left-to-right keeping the
+// first occurrence of each location and bumping later duplicates to
+// the next free slot. linkCrossStage propagates the final VS-output
+// location to the matching FS input by name, so this only needs to
+// produce a self-consistent unique-location list per side.
+function renumberLocations(
+  params: readonly EntryParameter[],
+): readonly EntryParameter[] {
+  const used = new Set<number>();
+  const out: EntryParameter[] = [];
+  let needsRemap = false;
+  for (const p of params) {
+    const locDec = p.decorations.find((d) => d.kind === "Location");
+    if (!locDec || locDec.kind !== "Location") {
+      out.push(p);
+      continue;
+    }
+    if (used.has(locDec.value)) {
+      let next = 0;
+      while (used.has(next)) next++;
+      used.add(next);
+      out.push({
+        ...p,
+        decorations: p.decorations.map((d) =>
+          d.kind === "Location" ? { kind: "Location", value: next } : d,
+        ),
+      });
+      needsRemap = true;
+    } else {
+      used.add(locDec.value);
+      out.push(p);
+    }
+  }
+  return needsRemap ? out : params;
 }
 
 function redirectPipedWrites(s: Stmt, carriers: Map<string, Var>): Stmt {

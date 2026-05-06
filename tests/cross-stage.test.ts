@@ -17,6 +17,7 @@ import {
   linkFragmentOutputs,
   linkHelpers,
   pruneCrossStage,
+  pruneVertexInputs,
   reduceUniforms,
 } from "@aardworx/wombat.shader/passes";
 
@@ -55,6 +56,50 @@ describe("reduceUniforms", () => {
     expect(u.kind).toBe("Uniform");
     if (u.kind === "Uniform") {
       expect(u.uniforms.map((d) => d.name)).toEqual(["u_used"]);
+    }
+  });
+
+  it("merges Uniform ValueDefs sharing a buffer name", () => {
+    // Two effects each pull `uniform.X` through the namespace
+    // import, so each independently emits a `Uniform` ValueDef
+    // whose decls' `buffer` is `"uniform"`. Without merging, the
+    // WGSL emitter then writes `struct _UB_uniform { … }` twice
+    // with the same name and pipeline creation fails with
+    // "redeclaration of '_UB_uniform'". `reduceUniforms` should
+    // collapse the two decls into one with deduped members.
+    const m: Module = {
+      types: [],
+      values: [
+        { kind: "Uniform", uniforms: [
+          { name: "ModelTrafo", type: Tf32, buffer: "uniform" },
+          { name: "ViewProjTrafo", type: Tf32, buffer: "uniform" },
+        ] },
+        { kind: "Uniform", uniforms: [
+          { name: "ModelTrafo", type: Tf32, buffer: "uniform" }, // duplicate
+          { name: "LightLocation", type: Tf32, buffer: "uniform" },
+        ] },
+        {
+          kind: "Entry", entry: {
+            name: "main", stage: "fragment", inputs: [], outputs: [],
+            arguments: [], returnType: Tvoid,
+            body: { kind: "Sequential", body: [
+              { kind: "Expression", value: readU("ModelTrafo", Tf32) },
+              { kind: "Expression", value: readU("ViewProjTrafo", Tf32) },
+              { kind: "Expression", value: readU("LightLocation", Tf32) },
+            ] },
+            decorations: [],
+          },
+        },
+      ],
+    };
+    const out = reduceUniforms(m);
+    const us = out.values.filter((x) => x.kind === "Uniform");
+    expect(us.length).toBe(1);
+    if (us[0]?.kind === "Uniform") {
+      const names = us[0].uniforms.map((d) => d.name).sort();
+      expect(names).toEqual(["LightLocation", "ModelTrafo", "ViewProjTrafo"]);
+      // All members share the merged buffer name.
+      for (const u of us[0].uniforms) expect(u.buffer).toBe("uniform");
     }
   });
 
@@ -210,6 +255,82 @@ describe("pruneCrossStage", () => {
     const out = entriesOf(pruned)[0]!.outputs;
     // No fragment / compute consumes v_extra → drops; gl_Position kept.
     expect(out.map((o) => o.name)).toEqual(["gl_Position"]);
+  });
+
+  it("drops VS inputs whose body reads vanish after output pruning", () => {
+    // Speculative-output trafo: declares 3 vertex attributes but
+    // only Positions feeds the surviving gl_Position write. After
+    // the FS reads nothing of v_normal, the v_normal write becomes
+    // dead → DCE drops the `n4 = …Normals…` chain → the
+    // `ReadInput("Input", "Normals")` reference is gone → the
+    // declared `Normals` vertex attribute should be pruned too,
+    // otherwise the rendering layer asks the runtime for an attr
+    // the shader doesn't actually use.
+    const v = (name: string, type: Type): Var => ({ name, type, mutable: false });
+    const positions: Var = v("positions", Tvec3f);
+    const normals:   Var = v("normals",   Tvec3f);
+    const tangents:  Var = v("tangents",  Tvec3f);
+    const vertex: EntryDef = {
+      name: "vsMain", stage: "vertex",
+      inputs: [
+        { name: "Positions", type: Tvec3f, semantic: "Positions", decorations: [{ kind: "Location", value: 0 }] },
+        { name: "Normals",   type: Tvec3f, semantic: "Normals",   decorations: [{ kind: "Location", value: 1 }] },
+        { name: "Tangents",  type: Tvec3f, semantic: "Tangents",  decorations: [{ kind: "Location", value: 2 }] },
+      ],
+      outputs: [
+        { name: "gl_Position", type: Tvec4f, semantic: "Positions", decorations: [{ kind: "Builtin", value: "position" }] },
+        { name: "v_normal",    type: Tvec3f, semantic: "Normals",   decorations: [{ kind: "Location", value: 0 }] },
+        { name: "v_tangent",   type: Tvec3f, semantic: "Tangents",  decorations: [{ kind: "Location", value: 1 }] },
+      ],
+      arguments: [], returnType: Tvoid,
+      body: {
+        kind: "Sequential", body: [
+          { kind: "Declare", var: positions, init: { kind: "Expr", value: readI("Positions", Tvec3f) } },
+          { kind: "Declare", var: normals,   init: { kind: "Expr", value: readI("Normals",   Tvec3f) } },
+          { kind: "Declare", var: tangents,  init: { kind: "Expr", value: readI("Tangents",  Tvec3f) } },
+          { kind: "WriteOutput", name: "gl_Position",
+            value: { kind: "Expr", value: { kind: "NewVector",
+              components: [{ kind: "Var", var: positions, type: Tvec3f } as Expr,
+                           constF(1)],
+              type: Tvec4f } } },
+          { kind: "WriteOutput", name: "v_normal",
+            value: { kind: "Expr", value: { kind: "Var", var: normals, type: Tvec3f } } },
+          { kind: "WriteOutput", name: "v_tangent",
+            value: { kind: "Expr", value: { kind: "Var", var: tangents, type: Tvec3f } } },
+        ],
+      },
+      decorations: [],
+    };
+    const fragment: EntryDef = {
+      name: "fsMain", stage: "fragment",
+      // FS reads neither Normals nor Tangents — only its own
+      // unrelated input.
+      inputs: [],
+      outputs: [{ name: "outColor", type: Tvec4f, semantic: "Color", decorations: [{ kind: "Location", value: 0 }] }],
+      arguments: [], returnType: Tvoid,
+      body: {
+        kind: "WriteOutput", name: "outColor",
+        value: { kind: "Expr", value: { kind: "NewVector",
+          components: [constF(1), constF(0), constF(0), constF(1)], type: Tvec4f } },
+      },
+      decorations: [],
+    };
+    const m: Module = { types: [], values: [
+      { kind: "Entry", entry: vertex },
+      { kind: "Entry", entry: fragment },
+    ]};
+    // The two-step shape: `pruneCrossStage` drops dead VS outputs +
+    // their writes (and DCEs the body so reads become unreachable);
+    // `pruneVertexInputs` is the separate pass that drops the
+    // attribute declarations now that the body no longer references
+    // them. They split because the production pipeline runs
+    // `linkHelpers` between the two — that's what cleans up
+    // wrapper-side state-init writes (`s.X = in.X`) for fields the
+    // first prune has just orphaned.
+    const pruned = pruneVertexInputs(pruneCrossStage(m));
+    const vs = entriesOf(pruned).find((e) => e.stage === "vertex")!;
+    expect(vs.inputs.map((p) => p.name).sort()).toEqual(["Positions"]);
+    expect(vs.outputs.map((o) => o.name).sort()).toEqual(["gl_Position"]);
   });
 });
 

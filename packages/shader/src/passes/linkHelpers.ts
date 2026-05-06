@@ -288,85 +288,147 @@ function collectWrapperLiveFields(body: Stmt, stateVar: Var): Set<string> {
 }
 
 /**
- * For a helper body, mark every `ReadInput("Input", X)` from a
- * surviving live write as live. Survivors = WriteOutputs whose
- * `name` is in `live`. The recursive walk into RHS expressions
- * picks up nested reads (e.g., `out.X = f(g(in.Y))` makes Y live).
+ * For a helper body, mark every `ReadInput("Input", X)` reachable
+ * from a surviving live write or side-effect as live. Two-phase
+ * data-flow:
+ *
+ *   1. Walk live writes (`WriteOutput` whose name is in `live`,
+ *      side-effecting stmts like `Discard` / `Increment` / a
+ *      `Write` to a live field). Collect every Var referenced as
+ *      `liveVars`, every `ReadInput("Input", N)` as `live`.
+ *   2. Iterate over `Declare` stmts whose Var is in `liveVars`,
+ *      walking their init exprs the same way. Repeat until
+ *      `liveVars` stops growing — a dependency chain
+ *      `let a = …f(b)…; let b = …in.X…;` discovers `b` from
+ *      `a`'s walk, then `b`'s init walk discovers `X`.
+ *
+ * The point of phase 2 is to NOT visit init exprs of dead lets.
+ * A naive walk-every-Declare misses that `let t4 = …in.X…` is
+ * dead when t4's only consumer is a `WriteOutput` to a non-live
+ * field — and `X` then gets falsely added to `live`, blocking the
+ * upstream prune from dropping the input attribute.
  */
 function propagateHelperReads(body: Stmt, live: Set<string>): void {
+  const liveVars = new Set<{ readonly name: string }>();
   const visitExpr = (e: Expr): void => {
-    if (e.kind === "ReadInput" && e.scope === "Input") {
-      live.add(e.name);
-    }
+    if (e.kind === "Var") liveVars.add(e.var);
+    if (e.kind === "ReadInput" && e.scope === "Input") live.add(e.name);
     walkExprChildren(e, visitExpr);
   };
-  const visitStmt = (s: Stmt): void => {
+  const visitRExpr = (r: { kind: "Expr"; value: Expr } | { kind: "ArrayLiteral"; values: readonly Expr[] }): void => {
+    if (r.kind === "Expr") visitExpr(r.value);
+    else for (const v of r.values) visitExpr(v);
+  };
+  // Phase 1: visit live-anchor stmts. Skip `Declare` here.
+  const visitStmt1 = (s: Stmt): void => {
     switch (s.kind) {
       case "WriteOutput":
         if (live.has(s.name)) {
-          if (s.value.kind === "Expr") visitExpr(s.value.value);
-          else for (const v of s.value.values) visitExpr(v);
+          visitRExpr(s.value);
           if (s.index) visitExpr(s.index);
         }
         return;
       case "Write": {
-        // If lhs is LField(LVar(_), name), name might be a State
-        // field write — but in a `merged_state_helper` body the
-        // emitter targets `out.name` only via WriteOutput(name, …),
-        // so an explicit LField write on a state-typed LVar would
-        // be unusual. Fall through and walk RHS regardless so we
-        // don't drop reads we can't classify.
+        // Field-write to a live state field, or any other Write
+        // (including helper-call Writes whose RHS we DON'T walk
+        // because they reference Var(state)). Wrappers don't have
+        // helper-call Writes inside helpers, so this case is rare.
         const lname = lFieldName(s.target);
-        if (lname === undefined || live.has(lname)) {
+        if (lname === undefined) {
+          // Probably a write to a local var. Walk RHS to find
+          // dependencies, mark target var as live so its Declare's
+          // init gets walked in phase 2.
+          if (s.target.kind === "LVar") liveVars.add(s.target.var);
+          visitExpr(s.value);
+        } else if (live.has(lname)) {
           visitExpr(s.value);
         }
         return;
       }
+      case "Expression":
+        // Side-effecting expression — must run, so its reads are live.
+        visitExpr(s.value);
+        return;
       case "If":
         visitExpr(s.cond);
-        visitStmt(s.then);
-        if (s.else) visitStmt(s.else);
+        visitStmt1(s.then);
+        if (s.else) visitStmt1(s.else);
         return;
       case "Sequential":
       case "Isolated":
-        for (const c of s.body) visitStmt(c);
+        for (const c of s.body) visitStmt1(c);
         return;
       case "For":
-        visitStmt(s.init);
+        visitStmt1(s.init);
         visitExpr(s.cond);
-        visitStmt(s.step);
-        visitStmt(s.body);
+        visitStmt1(s.step);
+        visitStmt1(s.body);
         return;
       case "While":
       case "DoWhile":
         visitExpr(s.cond);
-        visitStmt(s.body);
+        visitStmt1(s.body);
         return;
       case "Loop":
-        visitStmt(s.body);
+        visitStmt1(s.body);
         return;
       case "Switch":
         visitExpr(s.value);
-        for (const c of s.cases) visitStmt(c.body);
-        if (s.default) visitStmt(s.default);
-        return;
-      case "Expression":
-        visitExpr(s.value);
-        return;
-      case "Declare":
-        if (s.init) {
-          if (s.init.kind === "Expr") visitExpr(s.init.value);
-          else for (const v of s.init.values) visitExpr(v);
-        }
+        for (const c of s.cases) visitStmt1(c.body);
+        if (s.default) visitStmt1(s.default);
         return;
       case "ReturnValue":
         visitExpr(s.value);
+        return;
+      // Declare deferred to phase 2.
+      // Discard / Barrier / Break / Continue / Return / Nop /
+      // Increment / Decrement: control-only; `Increment`/`Decrement`'s
+      // target Var counts as live — handle via liveVars seeding.
+      case "Increment":
+      case "Decrement":
+        if (s.target.kind === "LVar") liveVars.add(s.target.var);
         return;
       default:
         return;
     }
   };
-  visitStmt(body);
+  visitStmt1(body);
+
+  // Phase 2: iterate Declares for liveVars. Each new Declare init
+  // may add more vars / reads; loop to fixed point.
+  const collectDeclares = (s: Stmt, out: { var: { name: string }; init?: Expr | undefined }[]): void => {
+    if (s.kind === "Declare" && s.init) {
+      const initExpr = s.init.kind === "Expr" ? s.init.value : undefined;
+      out.push({ var: s.var, init: initExpr });
+    }
+    if (s.kind === "Sequential" || s.kind === "Isolated") {
+      for (const c of s.body) collectDeclares(c, out);
+    } else if (s.kind === "If") {
+      collectDeclares(s.then, out);
+      if (s.else) collectDeclares(s.else, out);
+    } else if (s.kind === "For" || s.kind === "While" || s.kind === "DoWhile" || s.kind === "Loop") {
+      if (s.kind === "For") collectDeclares(s.init, out);
+      collectDeclares(s.body, out);
+    } else if (s.kind === "Switch") {
+      for (const c of s.cases) collectDeclares(c.body, out);
+      if (s.default) collectDeclares(s.default, out);
+    }
+  };
+  const decls: { var: { name: string }; init?: Expr | undefined }[] = [];
+  collectDeclares(body, decls);
+
+  let changed = true;
+  let safety = 0;
+  while (changed && safety++ < 32) {
+    changed = false;
+    for (const d of decls) {
+      if (!liveVars.has(d.var)) continue;
+      if (!d.init) continue;
+      const before = liveVars.size + live.size;
+      visitExpr(d.init);
+      if (liveVars.size + live.size > before) changed = true;
+    }
+  }
 }
 
 function lFieldName(l: import("../ir/index.js").LExpr): string | undefined {

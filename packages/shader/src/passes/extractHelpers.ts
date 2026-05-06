@@ -50,6 +50,7 @@ import type {
   EntryParameter,
   Expr,
   FunctionRef,
+  LExpr,
   Module,
   Stmt,
   StructField,
@@ -60,6 +61,33 @@ import type {
 } from "../ir/index.js";
 import { Tvoid, hashValue } from "../ir/index.js";
 import { readInputs } from "./analysis.js";
+import { mapStmt } from "./transform.js";
+
+/**
+ * Rewrite every `ReadInput("Builtin", K)` (and matching `LInput`)
+ * inside `body` to `ReadInput("Input", <stateField>)` where the
+ * State field name is looked up by the builtin semantic `K`.
+ * Helpers have no `@builtin(K)` params of their own — the
+ * wrapper's init writes `state.<field> = <builtinRead>`, then
+ * the helper sees that value via the standard `Input` read path.
+ */
+function rewireBuiltinReads(body: Stmt, semToField: ReadonlyMap<string, string>): Stmt {
+  const exprFn = (e: Expr): Expr => {
+    if (e.kind === "ReadInput" && e.scope === "Builtin") {
+      const field = semToField.get(e.name);
+      if (field !== undefined) return { ...e, scope: "Input", name: field };
+    }
+    return e;
+  };
+  const lexprFn = (l: LExpr): LExpr => {
+    if (l.kind === "LInput" && l.scope === "Builtin") {
+      const field = semToField.get(l.name);
+      if (field !== undefined) return { ...l, scope: "Input", name: field };
+    }
+    return l;
+  };
+  return mapStmt(body, { expr: exprFn, lexpr: lexprFn });
+}
 
 export interface ExtractedFusion {
   /** State struct TypeDef to add to the module. */
@@ -136,6 +164,25 @@ export function extractFusedEntry(
     kind: "Struct", name: stateName, fields: state.fields,
   };
 
+  // Map builtin semantic ("position", "vertex_index", …) → State
+  // field name. Helpers can't reach the wrapper's `@builtin(K)`
+  // params directly — we thread the value through the State
+  // struct, so a helper's `ReadInput("Builtin", K)` needs to be
+  // rewired to `ReadInput("Input", <stateFieldName>)` (which the
+  // emit lowers to `out.<field>` per the `merged_state_helper`
+  // convention).
+  const builtinSemanticToField = new Map<string, string>();
+  for (const op of operands) {
+    for (const p of op.inputs) {
+      const builtinDec = (p.decorations ?? []).find((d) => d.kind === "Builtin");
+      if (builtinDec && builtinDec.kind === "Builtin") {
+        if (!builtinSemanticToField.has(builtinDec.value)) {
+          builtinSemanticToField.set(builtinDec.value, p.name);
+        }
+      }
+    }
+  }
+
   // Build a helper Function per operand. The helper takes the merged
   // State as its only parameter and returns the (mutated) State.
   // Body is the operand's body verbatim — emit handles the
@@ -148,7 +195,13 @@ export function extractFusedEntry(
     const stateParam: Var = {
       name: "s_in", type: stateType, mutable: false,
     };
-    const helperBody: Stmt = op.body;
+    // Rewire `ReadInput("Builtin", K)` → `ReadInput("Input",
+    // <field>)` so the helper body reads the value from the State
+    // struct rather than a wrapper-level builtin parameter that
+    // doesn't exist in this scope.
+    const helperBody: Stmt = builtinSemanticToField.size > 0
+      ? rewireBuiltinReads(op.body, builtinSemanticToField)
+      : op.body;
     const helperFn: ValueDef = {
       kind: "Function",
       signature: {
@@ -186,8 +239,27 @@ export function extractFusedEntry(
   // which scanned the body rather than trusting `b.inputs`.
   const bodyReads: Set<string>[] = operands.map((o) => {
     const r = new Set<string>();
+    // Track Input scope reads by name AND Builtin scope reads
+    // (which surface as input EntryParameters with a Builtin
+    // decoration) by their semantic. The latter handles the
+    // `b: FragmentBuiltinIn` second-arg builtin records — without
+    // this, `fragCoord` etc. wouldn't make it into wrapperInputs
+    // and the wrapper init wouldn't seed `state.fragCoord` from
+    // the @builtin(position) param, leaving the helper's
+    // (rewired) Input read against an uninitialised State field.
+    const builtinSemReads = new Set<string>();
     for (const sn of readInputs(o.body).values()) {
       if (sn.scope === "Input") r.add(sn.name);
+      else if (sn.scope === "Builtin") builtinSemReads.add(sn.name);
+    }
+    // Map declared builtin inputs back to their field-name if the
+    // body reads them.
+    for (const p of o.inputs) {
+      const builtinDec = (p.decorations ?? []).find((d) => d.kind === "Builtin");
+      if (builtinDec && builtinDec.kind === "Builtin"
+          && builtinSemReads.has(builtinDec.value)) {
+        r.add(p.name);
+      }
     }
     return r;
   });
@@ -303,8 +375,8 @@ export function extractFusedEntry(
   const wrapperEntry: EntryDef = {
     name: fusedName,
     stage,
-    inputs: wrapperInputs,
-    outputs: wrapperOutputs,
+    inputs: renumberLocations(wrapperInputs),
+    outputs: renumberLocations(wrapperOutputs),
     arguments: operands[0]!.arguments,
     returnType: Tvoid,
     decorations: operands[0]!.decorations,
@@ -350,6 +422,41 @@ function mergeParams(xs: readonly EntryParameter[]): EntryParameter[] {
     seen.set(p.name, p);
   }
   return [...seen.values()];
+}
+
+// Each operand assigned its Locations starting from 0, so the merged
+// wrapper-input / wrapper-output lists almost always have collisions.
+// Walk left-to-right keeping the first occurrence of each location and
+// bumping later duplicates to the next free slot. linkCrossStage
+// propagates the final VS-output location to the matching FS input by
+// name, so we only need self-consistent unique locations per side.
+function renumberLocations(params: readonly EntryParameter[]): EntryParameter[] {
+  const used = new Set<number>();
+  const out: EntryParameter[] = [];
+  let needsRemap = false;
+  for (const p of params) {
+    const locDec = (p.decorations ?? []).find((d) => d.kind === "Location");
+    if (!locDec || locDec.kind !== "Location") {
+      out.push(p);
+      continue;
+    }
+    if (used.has(locDec.value)) {
+      let next = 0;
+      while (used.has(next)) next++;
+      used.add(next);
+      out.push({
+        ...p,
+        decorations: (p.decorations ?? []).map((d) =>
+          d.kind === "Location" ? { kind: "Location", value: next } : d,
+        ),
+      });
+      needsRemap = true;
+    } else {
+      used.add(locDec.value);
+      out.push(p);
+    }
+  }
+  return needsRemap ? out : [...params];
 }
 
 /**

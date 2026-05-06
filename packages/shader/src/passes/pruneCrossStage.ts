@@ -126,24 +126,52 @@ function pruneVertex(e: EntryDef, live: Set<string>): EntryDef {
     const isBuiltin = p.decorations.some((d) => d.kind === "Builtin");
     return isBuiltin || live.has(p.name);
   });
-  if (keptOutputs.length === e.outputs.length) {
-    // No outputs dropped — body unchanged.
-    return e;
-  }
+  if (keptOutputs.length === e.outputs.length) return e;
 
   const dropped = new Set<string>();
   for (const p of e.outputs) {
     if (!keptOutputs.includes(p)) dropped.add(p.name);
   }
+  // 2. Replace WriteOutput(droppedName) with Nop, then DCE so
+  //    variables that fed only those writes disappear.
+  const body = dceStmt(stripWritesTo(e.body, dropped));
 
-  // 2. Replace WriteOutput(droppedName) with Nop.
-  const stripped = stripWritesTo(e.body, dropped);
+  return { ...e, outputs: keptOutputs, body };
+}
 
-  // 3. DCE — variables / computations that fed only those writes
-  //    become unused and disappear.
-  const cleaned = dceStmt(stripped);
-
-  return { ...e, outputs: keptOutputs, body: cleaned };
+/**
+ * Drop declared vertex INPUTS the body no longer reads. Runs as
+ * a separate pass AFTER `linkHelpers` has had a chance to clean
+ * up state-init writes (`s.X = in.X`) for state fields that lost
+ * their consumers when `pruneCrossStage` dropped the
+ * corresponding outputs. Without this step the EntryDef still
+ * asks the runtime for unused vertex attributes (e.g.
+ * `DiffuseColorUTangents` for an `effect(trafo, simpleLighting)`
+ * pipeline that doesn't consume them) and the rendering layer
+ * errors with `prepareRenderObject: missing vertex attribute
+ * "X"` at draw time.
+ *
+ * Builtin inputs (`@builtin(vertex_index)` etc.) stay regardless
+ * — they're supplied by the pipeline, not a vertex buffer.
+ */
+export function pruneVertexInputs(module: Module): Module {
+  let changed = false;
+  const newValues = module.values.map((v) => {
+    if (v.kind !== "Entry" || v.entry.stage !== "vertex") return v;
+    const e = v.entry;
+    const reads = new Set<string>();
+    for (const sn of readInputsAnalysis(e.body).values()) {
+      if (sn.scope === "Input") reads.add(sn.name);
+    }
+    const keptInputs = e.inputs.filter((p) => {
+      const isBuiltin = p.decorations.some((d) => d.kind === "Builtin");
+      return isBuiltin || reads.has(p.name);
+    });
+    if (keptInputs.length === e.inputs.length) return v;
+    changed = true;
+    return { ...v, entry: { ...e, inputs: keptInputs } };
+  });
+  return changed ? { ...module, values: newValues } : module;
 }
 
 function stripWritesTo(s: Stmt, dropped: ReadonlySet<string>): Stmt {

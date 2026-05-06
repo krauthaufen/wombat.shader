@@ -24,7 +24,7 @@ import type {
   Var,
 } from "../ir/index.js";
 import { mapExpr, mapStmt } from "./transform.js";
-import { substVars, substVarsExpr } from "./substitute.js";
+import { substVars } from "./substitute.js";
 
 export interface InlinePolicy {
   /** Decide whether to inline a particular call. */
@@ -76,19 +76,26 @@ function tryInline(
   if (!ret) return undefined;
   // Reject if any parameter is `inout` — we don't have an LExpr arg to bind to here.
   if (fn.signature.parameters.some((p) => p.modifier === "inout")) return undefined;
-  // Bind parameters to argument expressions.
-  const mapping = new Map<Var, Expr>();
+  // Bind parameters to argument expressions, keyed by name. The
+  // function body's Var nodes for parameters and the inliner's view of
+  // them aren't the same JS object (the frontend produces the body's
+  // Vars; here we only have the FunctionSignature's Parameter records),
+  // so identity-based substitution misses. Match by name instead.
+  const mapping = new Map<string, Expr>();
+  const paramNames = new Set<string>();
   for (let i = 0; i < fn.signature.parameters.length; i++) {
     const p = fn.signature.parameters[i]!;
     const a = args[i];
     if (!a) return undefined;
-    // We construct a synthetic Var matching the parameter (the function
-    // body will reference the param Var; if the body was authored against
-    // a different Var identity for the same name, this won't work — but
-    // the frontend constructs both from the same source.)
-    mapping.set(syntheticParamVar(p.name, p.type), a);
+    mapping.set(p.name, a);
+    paramNames.add(p.name);
   }
-  return substVarsExpr(ret, mapping);
+  return mapExpr(ret, (e) => {
+    if (e.kind === "Var" && paramNames.has(e.var.name)) {
+      return mapping.get(e.var.name)!;
+    }
+    return e;
+  });
 }
 
 function singleReturn(body: Stmt): Expr | undefined {
@@ -108,9 +115,6 @@ function singleReturn(body: Stmt): Expr | undefined {
   return undefined;
 }
 
-function syntheticParamVar(name: string, type: Expr["type"]): Var {
-  return { name, type, mutable: false };
-}
 
 // ─────────────────────────────────────────────────────────────────────
 // Copy propagation
@@ -160,4 +164,3 @@ function isTriviallyCopyable(e: Expr): boolean {
 export const _internal = { tryInline, singleReturn, copyPropStmt };
 // silence unused-import warning for substVars (kept exported by the module)
 void substVars;
-void mapExpr;

@@ -172,9 +172,14 @@ export function buildInterface(input: BuildInterfaceInput): ProgramInterface {
   const stages = enrichStageInfo(input.module, input.stages);
   const attributes = collectAttributes(input.module);
   const fragmentOutputs = collectFragmentOutputs(input.module);
-  const { uniforms, uniformBlocks } = collectUniforms(input.module, layoutTarget);
-  const { samplers, textures } = collectSamplersAndTextures(input.module);
-  const storageBuffers = collectStorageBuffers(input.module, input.target);
+  // Walk the module once with one slot counter shared across uniform
+  // blocks / samplers / textures / storage buffers, mirroring the WGSL
+  // emitter's centralised assignment so the runtime BindGroupLayout
+  // matches what `var<...>` declarations the shader actually has.
+  const slot = { next: 0 };
+  const { uniforms, uniformBlocks } = collectUniforms(input.module, layoutTarget, slot);
+  const { samplers, textures } = collectSamplersAndTextures(input.module, slot);
+  const storageBuffers = collectStorageBuffers(input.module, input.target, slot);
 
   return {
     target: input.target,
@@ -270,8 +275,10 @@ function collectAttributes(module: Module): AttributeInfo[] {
     let nextLoc = 0;
     for (const p of e.inputs) {
       if (p.decorations.some((d) => d.kind === "Builtin")) continue;
-      const locDec = p.decorations.find((d) => d.kind === "Location");
-      const location = locDec && locDec.kind === "Location" ? locDec.value : nextLoc++;
+      // Always auto-assign — emit.ts emits contiguous vertex-input
+      // locations in declaration order, so the runtime view has to
+      // mirror that.
+      const location = nextLoc++;
       const fmt = vertexFormat(p.type);
       out.push({
         name: p.name,
@@ -300,14 +307,17 @@ function collectFragmentOutputs(module: Module): OutputInfo[] {
   return dedupeByName(out);
 }
 
-function collectUniforms(module: Module, target: LayoutTarget): {
+function collectUniforms(
+  module: Module,
+  target: LayoutTarget,
+  slotCounter: { next: number },
+): {
   uniforms: LooseUniformInfo[];
   uniformBlocks: UniformBlockInfo[];
 } {
   const loose: LooseUniformInfo[] = [];
   const blocks = new Map<string, { group: number; slot: number; fields: UniformFieldInfo[]; size: number; align: number }>();
 
-  let autoSlot = 0;
   for (const v of module.values) {
     if (v.kind !== "Uniform") continue;
     // Group uniforms by `buffer` name.
@@ -342,8 +352,12 @@ function collectUniforms(module: Module, target: LayoutTarget): {
         if (fl.align > maxAlign) maxAlign = fl.align;
       }
       const size = roundUp(offset, maxAlign);
-      const group = decls[0]?.group ?? 0;
-      const slot  = decls[0]?.slot ?? autoSlot++;
+      // Always auto-assign — explicit group/slot annotations on
+      // upstream UniformDecls are ignored. Multiple effects can pin
+      // (group=0, slot=0) independently and collide; centralising the
+      // assignment here keeps the runtime layout consistent.
+      const group = 0;
+      const slot  = slotCounter.next++;
       blocks.set(bufferName, { group, slot, fields, size, align: maxAlign });
     }
   }
@@ -357,7 +371,10 @@ function collectUniforms(module: Module, target: LayoutTarget): {
   return { uniforms: loose, uniformBlocks };
 }
 
-function collectSamplersAndTextures(module: Module): {
+function collectSamplersAndTextures(
+  module: Module,
+  slotCounter: { next: number },
+): {
   samplers: SamplerInfo[];
   textures: TextureInfo[];
 } {
@@ -367,8 +384,8 @@ function collectSamplersAndTextures(module: Module): {
     if (v.kind !== "Sampler") continue;
     const entry = {
       name: v.name,
-      group: v.binding.group,
-      slot: v.binding.slot,
+      group: 0,
+      slot: slotCounter.next++,
       type: v.type,
     };
     if (v.type.kind === "Texture") textures.push(entry);
@@ -377,7 +394,11 @@ function collectSamplersAndTextures(module: Module): {
   return { samplers, textures };
 }
 
-function collectStorageBuffers(module: Module, target: Target): StorageBufferInfo[] {
+function collectStorageBuffers(
+  module: Module,
+  target: Target,
+  slotCounter: { next: number },
+): StorageBufferInfo[] {
   const out: StorageBufferInfo[] = [];
   const layoutTarget: LayoutTarget = target === "glsl" ? "glsl-std140" : "wgsl-storage";
   for (const v of module.values) {
@@ -386,8 +407,8 @@ function collectStorageBuffers(module: Module, target: Target): StorageBufferInf
     const fields = (layout.fields ?? []).map((f) => fieldToInfo(f));
     out.push({
       name: v.name,
-      group: v.binding.group,
-      slot: v.binding.slot,
+      group: 0,
+      slot: slotCounter.next++,
       access: v.access,
       size: layout.size,
       fields,

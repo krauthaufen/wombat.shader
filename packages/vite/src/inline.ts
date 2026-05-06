@@ -867,6 +867,37 @@ function collectCaptureUses(
       if (node.body) visit(node.body, inner);
       return;
     }
+    // `for (let x = …; cond; step) body` — the initializer's bindings
+    // are visible inside cond / step / body. Without this, the loop
+    // variable is mis-classified as a closure capture and the runtime
+    // emits `{ x: () => x }` referring to outer-scope `x` (typically
+    // undefined → ReferenceError).
+    if (ts.isForStatement(node)) {
+      const inner = new Set(scopeBound);
+      if (node.initializer && ts.isVariableDeclarationList(node.initializer)) {
+        for (const d of node.initializer.declarations) {
+          if (ts.isIdentifier(d.name)) inner.add(d.name.text);
+          if (d.initializer) visit(d.initializer, scopeBound);
+        }
+      } else if (node.initializer) {
+        visit(node.initializer, scopeBound);
+      }
+      if (node.condition) visit(node.condition, inner);
+      if (node.incrementor) visit(node.incrementor, inner);
+      visit(node.statement, inner);
+      return;
+    }
+    if (ts.isForOfStatement(node) || ts.isForInStatement(node)) {
+      const inner = new Set(scopeBound);
+      if (ts.isVariableDeclarationList(node.initializer)) {
+        for (const d of node.initializer.declarations) {
+          if (ts.isIdentifier(d.name)) inner.add(d.name.text);
+        }
+      }
+      visit(node.expression, scopeBound);
+      visit(node.statement, inner);
+      return;
+    }
     ts.forEachChild(node, (c) => visit(c, scopeBound));
   }
 
@@ -1031,6 +1062,18 @@ function typeToTypeNodeStrippingBrands(
   enclosing: ts.Node,
   flags: ts.NodeBuilderFlags,
 ): ts.TypeNode | undefined {
+  // Stage builtin records (`ComputeBuiltins`, `VertexBuiltinIn`,
+  // `FragmentBuiltinIn`) get special handling in the frontend's
+  // `deriveParamShape` (each member auto-promotes to `@builtin(...)`).
+  // Expanding them into an anonymous `{ ... }` TypeLiteral here would
+  // make the frontend treat them as plain TypeLiteral inputs and emit
+  // `@location(...)` for each member — Dawn then rejects compute
+  // entries with "@location cannot be used by compute shaders".
+  // Preserve the original name so `builtinArgumentsForRecord` runs.
+  const tName = t.getSymbol()?.getName() ?? t.aliasSymbol?.getName();
+  if (tName && STAGE_BUILTIN_RECORDS.has(tName)) {
+    return ts.factory.createTypeReferenceNode(tName);
+  }
   const props = t.getProperties().filter(
     (p) => p.name !== SEMANTIC_KEY && p.name !== BUILTIN_KEY,
   );
@@ -1244,6 +1287,15 @@ function safeExtractEntryParams(
   // Object-shaped only — anything else (a bare V4f return, a void
   // input, etc.) falls through to the existing carrier-walk path.
   if (t.getProperties().length === 0) return undefined;
+  // Stage builtin records (`ComputeBuiltins`, `VertexBuiltinIn`,
+  // `FragmentBuiltinIn`) have a fixed property → @builtin(...) shape.
+  // The frontend's `deriveParamShape` already handles them via the
+  // `builtinArgumentsForRecord` / `secondaryBuiltinShape` table, so
+  // bail out here and let it run — otherwise every member ends up
+  // with a `@location()` decoration and Dawn rejects the compute
+  // entry point with "@location cannot be used by compute shaders".
+  const symName = t.getSymbol()?.getName() ?? t.aliasSymbol?.getName();
+  if (symName && STAGE_BUILTIN_RECORDS.has(symName)) return undefined;
   return entryParamsFromObjectType(checker, t, stage, direction);
 }
 

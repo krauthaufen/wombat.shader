@@ -90,6 +90,10 @@ const WGSL_RESERVED: ReadonlySet<string> = new Set<string>([
   "continuing", "default", "diagnostic", "discard", "else", "enable",
   "false", "fn", "for", "if", "let", "loop", "override", "requires",
   "return", "struct", "switch", "true", "var", "while",
+  // address-space keywords — WGSL treats them as contextual reserved
+  // names; using one as an identifier (e.g. `var<uniform> uniform: …`)
+  // makes Dawn flag a self-cyclic dependency on the var.
+  "uniform", "storage", "workgroup", "private", "function",
   // type keywords
   "array", "atomic", "bool", "f32", "f16", "i32", "u32", "mat2x2",
   "mat2x3", "mat2x4", "mat3x2", "mat3x3", "mat3x4", "mat4x2",
@@ -162,16 +166,26 @@ export function emitWgsl(module: Module, entryName?: string): EmitResult {
   }
   if (module.types.length > 0) w.blank();
 
-  // Module-level decls: uniforms, samplers, storage buffers.
-  let uniformAutoGroup = 0;
+  // Module-level decls: uniforms first, then samplers, then storage
+  // buffers. All on @group(0) with a single continuous binding-slot
+  // counter. The interface builder walks the module in the same
+  // order with the same counter so the runtime's BindGroupLayout
+  // entries match the WGSL `@binding(...)` indices exactly.
+  // Upstream `binding.group` / `binding.slot` annotations are ignored.
+  const slotCounter = { next: 0 };
   for (const v of module.values) {
-    if (v.kind === "Uniform") {
-      emitUniformGroup(ctx, v.uniforms, uniformAutoGroup);
-      uniformAutoGroup++;
-    } else if (v.kind === "Sampler") {
-      emitSampler(ctx, v.name, v.binding.group, v.binding.slot, v.type);
-    } else if (v.kind === "StorageBuffer") {
-      emitStorageBuffer(ctx, v.name, v.binding.group, v.binding.slot, v.layout, v.access);
+    if (v.kind === "Uniform") emitUniformGroup(ctx, v.uniforms, 0, slotCounter);
+  }
+  for (const v of module.values) {
+    if (v.kind === "Sampler") {
+      const slot = slotCounter.next++;
+      emitSampler(ctx, v.name, 0, slot, v.type);
+    }
+  }
+  for (const v of module.values) {
+    if (v.kind === "StorageBuffer") {
+      const slot = slotCounter.next++;
+      emitStorageBuffer(ctx, v.name, 0, slot, v.layout, v.access);
     }
   }
 
@@ -381,7 +395,12 @@ function emitStructDecl(ctx: Ctx, t: { kind: "Struct"; name: string; fields: rea
   ctx.out.line("};");
 }
 
-function emitUniformGroup(ctx: Ctx, uniforms: readonly UniformDecl[], autoGroup: number): void {
+function emitUniformGroup(
+  ctx: Ctx,
+  uniforms: readonly UniformDecl[],
+  autoGroup: number,
+  slotCounter: { next: number },
+): void {
   // Group by buffer name (default = each uniform its own var<uniform>).
   const buckets = new Map<string | undefined, UniformDecl[]>();
   for (const u of uniforms) {
@@ -390,26 +409,29 @@ function emitUniformGroup(ctx: Ctx, uniforms: readonly UniformDecl[], autoGroup:
     if (bucket) bucket.push(u);
     else buckets.set(key, [u]);
   }
-  let nextSlot = 0;
+  // Always auto-assign (group, binding). Upstream `group` / `slot`
+  // annotations on UniformDecls are ignored; otherwise two effects
+  // can each pin (0, 0) independently and the runtime BindGroupLayout
+  // ends up with duplicate entries. The slot counter is threaded by
+  // the caller so multiple Uniform ValueDefs share one numbering.
   for (const [buffer, group] of buckets) {
     if (buffer) {
-      // Generate a struct for the buffer.
       const structName = `_UB_${buffer}`;
       ctx.out.line(`struct ${structName} {`);
       ctx.out.inc();
       for (const u of group) ctx.out.line(`${safeName(u.name)}: ${typeStr(u.type)},`);
       ctx.out.dec();
       ctx.out.line("};");
-      const grp = group[0]?.group ?? autoGroup;
-      const slot = group[0]?.slot ?? nextSlot++;
+      const grp = autoGroup;
+      const slot = slotCounter.next++;
       ctx.out.line(`@group(${grp}) @binding(${slot}) var<uniform> ${safeName(buffer)}: ${structName};`);
       for (const u of group) {
         ctx.bindings.uniforms.push({ name: `${buffer}.${u.name}`, group: grp, slot, type: u.type });
       }
     } else {
       for (const u of group) {
-        const grp = u.group ?? autoGroup;
-        const slot = u.slot ?? nextSlot++;
+        const grp = autoGroup;
+        const slot = slotCounter.next++;
         ctx.out.line(`@group(${grp}) @binding(${slot}) var<uniform> ${safeName(u.name)}: ${typeStr(u.type)};`);
         ctx.bindings.uniforms.push({ name: u.name, group: grp, slot, type: u.type });
       }
@@ -441,7 +463,11 @@ function emitEntryStructs(ctx: Ctx, e: EntryDef): EntryIO {
     ctx.out.inc();
     let nextLoc = 0;
     for (const p of inputs) {
-      const loc = locationOf(p) ?? nextLoc++;
+      // Vertex attributes: always emit contiguous locations starting at
+      // 0 in declaration order, ignoring any preset Location decoration.
+      // FS inputs keep their pinned locations because linkCrossStage
+      // already aligned them with VS-output locations by name.
+      const loc = e.stage === "vertex" ? nextLoc++ : (locationOf(p) ?? nextLoc++);
       const interp = interpolation(p);
       const decor = (interp ? `${interp} ` : "") + `@location(${loc})`;
       ctx.out.line(`${decor} ${safeName(p.name)}: ${typeStr(p.type)},`);
@@ -869,8 +895,6 @@ export function expr(e: Expr): string {
     case "BitAnd":
     case "BitOr":
     case "BitXor":
-    case "ShiftLeft":
-    case "ShiftRight":
     case "Eq":
     case "Neq":
     case "Lt":
@@ -879,6 +903,17 @@ export function expr(e: Expr): string {
     case "Ge": {
       const op = BIN_OP[e.kind] ?? "*";
       return `(${expr(e.lhs)} ${op} ${expr(e.rhs)})`;
+    }
+    case "ShiftLeft":
+    case "ShiftRight": {
+      // WGSL requires the shift amount to be `u32` (the spec is
+      // strict about this where GLSL is permissive). Cast the RHS
+      // explicitly when it isn't already u32.
+      const op = BIN_OP[e.kind] ?? "<<";
+      const rhsType = e.rhs.type;
+      const rhsIsU32 = rhsType.kind === "Int" && !rhsType.signed;
+      const rhs = rhsIsU32 ? expr(e.rhs) : `u32(${expr(e.rhs)})`;
+      return `(${expr(e.lhs)} ${op} ${rhs})`;
     }
     case "Transpose":
       return `transpose(${expr(e.value)})`;

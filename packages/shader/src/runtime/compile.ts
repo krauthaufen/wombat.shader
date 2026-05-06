@@ -21,6 +21,7 @@ import {
   cse,
   dce,
   linkHelpers,
+  pruneVertexInputs,
   foldConstants,
   inferStorageAccess,
   inlinePass,
@@ -87,6 +88,14 @@ export interface CompileOptions {
    */
   readonly extraValues?: readonly ValueDef[];
   /**
+   * Top-level helper-function names to translate alongside the
+   * entries. Forwarded to `parseShader`'s `helpers` option — each
+   * named helper becomes a `Function` ValueDef in the IR Module
+   * and entry-side calls to it lower to a properly-typed
+   * `Call(FunctionRef)`.
+   */
+  readonly helpers?: readonly string[];
+  /**
    * Skip the matrix-reversal pass that converts row-major
    * (wombat.base / Aardvark) matrix operations into the column-
    * major form GPUs expect. Default: `false` (reversal applied).
@@ -136,6 +145,7 @@ export function compileShaderSource(
   const parsed = parseShader({
     source, entries, externalTypes,
     ...(options.file !== undefined ? { file: options.file } : {}),
+    ...(options.helpers !== undefined ? { helpers: options.helpers } : {}),
   });
   const merged: Module = options.extraValues
     ? { ...parsed, values: [...options.extraValues, ...parsed.values] }
@@ -189,6 +199,13 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
     // dropped more outputs. Cheap when there's nothing left to do
     // (single fixed-point iteration).
     m = linkHelpers(m);
+    // Drop declared vertex INPUTS the body no longer reads. Runs
+    // AFTER the second `linkHelpers` so state-init writes
+    // (`s.X = in.X`) for now-dead state fields are gone — without
+    // that ordering the wrapper body still has those init writes
+    // referencing inputs we want to drop, and the prune sees
+    // their `ReadInput` calls as live.
+    m = pruneVertexInputs(m);
     m = reduceUniforms(m);
   }
   // Storage-buffer inference must run after the optimiser passes (which

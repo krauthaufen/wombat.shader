@@ -368,6 +368,81 @@ describe("linkHelpers: backward liveness DCE across helper calls", () => {
     }
   });
 
+  it("dead let chain in a fused helper doesn't keep its inputs alive", () => {
+    // Regression: linkHelpers used to walk every Declare's init
+    // unconditionally, which marked an input as live if it was
+    // read by a `let` whose only consumer was a soon-to-be-pruned
+    // WriteOutput. End result: `pruneVertexInputs` saw a stale
+    // `ReadInput("Input", X)` reference and kept the vertex
+    // attribute alive even after the whole chain that fed it
+    // was dead. Symptom downstream: the runtime asks for
+    // `DiffuseColorUTangents` etc. for an `effect(trafo,
+    // simpleLighting)` pipeline and `prepareRenderObject` errors
+    // with "missing vertex attribute".
+    //
+    // Test: fuse two vertex effects. Effect A writes `live` and
+    // `dead` outputs. Effect A's `dead` write goes through a
+    // `let t = …in.Tangents…; out.dead = t.x` chain. Nothing
+    // downstream reads `dead`, so the chain dies and `Tangents`
+    // shouldn't surface on the wrapper input list.
+    const A: EntryDef = {
+      name: "A", stage: "vertex",
+      inputs: [
+        { name: "Positions", type: Tvec4f, semantic: "Positions", decorations: [{ kind: "Location", value: 0 }] },
+        { name: "Tangents",  type: Tvec3f, semantic: "Tangents",  decorations: [{ kind: "Location", value: 1 }] },
+      ],
+      outputs: [
+        { name: "gl_Position", type: Tvec4f, semantic: "Positions", decorations: [{ kind: "Builtin", value: "position" }] },
+        { name: "live",        type: Tvec4f, semantic: "live",      decorations: [{ kind: "Location", value: 0 }] },
+        { name: "dead",        type: Tf32,   semantic: "dead",      decorations: [{ kind: "Location", value: 1 }] },
+      ],
+      arguments: [], returnType: Tvoid,
+      body: seq(
+        // gl_Position from Positions (live).
+        writeOut("gl_Position", readI("Positions", Tvec4f)),
+        // `dead` from a let-chain reading Tangents — nothing
+        // downstream consumes it.
+        writeOut("dead",
+          { kind: "VecSwizzle", value: readI("Tangents", Tvec3f), comps: ["x"], type: Tf32 } as Expr),
+        // `live` survives.
+        writeOut("live", newV4(constF(1), constF(0), constF(0), constF(1))),
+      ),
+      decorations: [],
+    };
+    const B: EntryDef = {
+      name: "B", stage: "vertex",
+      inputs: [{ name: "Positions", type: Tvec4f, semantic: "Positions", decorations: [{ kind: "Location", value: 0 }] }],
+      outputs: [{ name: "gl_Position", type: Tvec4f, semantic: "Positions", decorations: [{ kind: "Builtin", value: "position" }] }],
+      arguments: [], returnType: Tvoid,
+      body: writeOut("gl_Position", readI("Positions", Tvec4f)),
+      decorations: [],
+    };
+    // FS reads only `live`.
+    const F: EntryDef = {
+      name: "F", stage: "fragment",
+      inputs: [{ name: "live", type: Tvec4f, semantic: "live", decorations: [{ kind: "Location", value: 0 }] }],
+      outputs: [{ name: "outColor", type: Tvec4f, semantic: "Color", decorations: [{ kind: "Location", value: 0 }] }],
+      arguments: [], returnType: Tvoid,
+      body: writeOut("outColor", readI("live", Tvec4f)),
+      decorations: [],
+    };
+    const r = compileShaderSource(
+      // Source unused — entries supplied directly.
+      "function _u() { return 0; }",
+      [],
+      { target: "wgsl",
+        extraValues: [
+          { kind: "Entry", entry: A },
+          { kind: "Entry", entry: B },
+          { kind: "Entry", entry: F },
+        ] },
+    );
+    // Vertex attrs should be `Positions` only — `Tangents` was
+    // consumed by a now-dead let-chain.
+    const attrs = r.interface.attributes.map((a) => a.name).sort();
+    expect(attrs).toEqual(["Positions"]);
+  });
+
   it("drops a whole helper whose only writes are to fields nothing reads", () => {
     // A writes only `dead` (consumed by no surfaced output).
     // B writes `outColor` independently of A.
