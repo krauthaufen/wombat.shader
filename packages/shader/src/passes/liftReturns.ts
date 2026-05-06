@@ -107,7 +107,13 @@ function tryLiftReturn(value: Expr, entry: EntryDef, span: import("../ir/index.j
         ...(span !== undefined ? { span } : {}),
       });
     }
-    if (writes.length === 0) return undefined;
+    // Empty record (`return {};`) — nothing to write, just bail.
+    // Without this, the original `ReturnValue(Const(Null))` survives
+    // and the WGSL emitter prints `return 0;` (invalid for a struct-
+    // returning function).
+    if (writes.length === 0) {
+      return { kind: "Return", ...(span !== undefined ? { span } : {}) };
+    }
     return {
       kind: "Sequential",
       body: [...writes, { kind: "Return", ...(span !== undefined ? { span } : {}) }],

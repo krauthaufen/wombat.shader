@@ -528,6 +528,58 @@ describe("extracted helpers: intrinsics + discard work end-to-end", () => {
     const src = r.stages[0]!.source;
     expect(src).toContain("discard;");
   });
+
+  it("a helper whose ONLY effect is `discard` is preserved even with no surfaced writes", () => {
+    // fragGate ONLY discards based on a uniform; surfaces nothing.
+    // fragColor writes the output independently. The discard MUST
+    // run (it's a side effect that gates whether the fragment lives
+    // at all) — DCE/linker mustn't drop helper_fragGate's call.
+    const source = `
+      function fragGate(input: {}): {} {
+        if (u_thresh > 0.5) { discard; }
+        return {};
+      }
+      function fragColor(input: {}): { outColor: V4f } {
+        return { outColor: new V4f(1.0, 0.0, 0.0, 1.0) };
+      }
+    `;
+    const r = compileShaderSource(source, [
+      { name: "fragGate", stage: "fragment", inputs: [], outputs: [] },
+      { name: "fragColor", stage: "fragment", inputs: [],
+        outputs: [{ name: "outColor", type: Tvec4f, semantic: "Color", decorations: [{ kind: "Location", value: 0 }] }] },
+    ], { target: "wgsl",
+      extraValues: [{ kind: "Uniform", uniforms: [{ name: "u_thresh", type: Tf32 }] }] });
+    const src = r.stages[0]!.source;
+    // Discard survives.
+    expect(src).toContain("discard;");
+    // helper_fragGate is still called from the wrapper (the linker
+    // doesn't drop side-effecting helper invocations even when the
+    // helper writes nothing surfaced).
+    expect(src).toMatch(/_fragGate_fragColor_fragGate_0\(s\)/);
+    // u_thresh stays bound — the if-condition pinning the discard
+    // keeps it live through reduceUniforms.
+    expect(src).toContain("u_thresh");
+  });
+
+  it("`return {};` (empty record return) lifts to a bare `return out;`, not `return 0;`", () => {
+    // Regression: the empty-record path used to return `undefined`
+    // from `tryLiftReturn`, so the original `ReturnValue(Const(Null))`
+    // survived and emitted `return 0;` (an int literal — invalid for
+    // a struct-returning function).
+    const source = `
+      function frag(input: {}): {} {
+        if (u_kill > 0.0) { discard; }
+        return {};
+      }
+    `;
+    const r = compileShaderSource(source, [
+      { name: "frag", stage: "fragment", inputs: [], outputs: [] },
+    ], { target: "wgsl",
+      extraValues: [{ kind: "Uniform", uniforms: [{ name: "u_kill", type: Tf32 }] }] });
+    const src = r.stages[0]!.source;
+    expect(src).not.toMatch(/return 0;/);
+    expect(src).toContain("discard;");
+  });
 });
 
 // ─── full-pipeline integration ─────────────────────────────────────
