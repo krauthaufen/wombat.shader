@@ -84,6 +84,36 @@ describe("Semantic / Builtin runtime constructors", () => {
     expect(t).toBe(uv);
     expect(t.x).toBe(0.25); expect(t.y).toBe(0.75);
   });
+
+  it("`as`-cast form works alongside the constructor form", () => {
+    // Both forms compile, both are zero-runtime — `as` is the
+    // pure type-assertion path, the constructor is the same thing
+    // at the value level (with arg-inferred generic).
+    const v3 = new V3f(1, 2, 3);
+    const v4 = new V4f(0, 0, 0, 1);
+
+    // Cast form — explicit generic when the arg's type doesn't
+    // match the alias's default `T`.
+    const p1 = v3 as PositionT<V3f>;
+    expect(p1).toBe(v3);
+    expect(p1.x).toBe(1);
+
+    // Constructor form — generic inferred from arg.
+    const p2 = Position(v3);
+    expect(p2).toBe(v3);
+
+    // Default-generic cast form — works when arg type matches the
+    // default. `Position` defaults to `Position<V4f>`.
+    const p3 = v4 as PositionT;
+    expect(p3).toBe(v4);
+    expect(p3.w).toBe(1);
+
+    // FragCoord too.
+    const fc1 = v4 as FragCoordT<V4f>;
+    const fc2 = FragCoord(v4);
+    expect(fc1).toBe(v4);
+    expect(fc2).toBe(v4);
+  });
 });
 
 describe("BUILTIN_SLOTS / isBuiltinAllowed registry", () => {
