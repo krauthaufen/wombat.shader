@@ -17,10 +17,6 @@ import {
   Texcoord,
   VertexIndex,
   isBuiltinAllowed,
-  type ClipPosition as ClipPositionT,
-  type Color as ColorT,
-  type FragCoord as FragCoordT,
-  type Position as PositionT,
 } from "../packages/shader/src/types/semantic.js";
 import { V2f, V3f, V4f, V3ui } from "@aardworx/wombat.base";
 
@@ -64,14 +60,16 @@ describe("Semantic / Builtin runtime constructors", () => {
   });
 
   // Type-level check (compile-only): if any of these break, the
-  // build fails, the test never runs.
+  // build fails, the test never runs. `Position` etc. resolve as
+  // both type AND value via TypeScript's namespace separation —
+  // no `T` suffix or aliased import needed.
   it("type-level: branded types unify with their underlying T at .x", () => {
     const _v3 = new V3f(1, 2, 3);
     const _v4 = new V4f(0, 0, 0, 1);
-    const p: PositionT<V3f> = Position(_v3);
-    const c: ColorT<V4f> = Color(_v4);
-    const cp: ClipPositionT<V4f> = ClipPosition(_v4);
-    const fc: FragCoordT<V4f> = FragCoord(_v4);
+    const p: Position<V3f> = Position(_v3);
+    const c: Color<V4f> = Color(_v4);
+    const cp: ClipPosition<V4f> = ClipPosition(_v4);
+    const fc: FragCoord<V4f> = FragCoord(_v4);
     expect(p.x).toBe(1);
     expect(c.w).toBe(1);
     expect(cp.w).toBe(1);
@@ -94,7 +92,7 @@ describe("Semantic / Builtin runtime constructors", () => {
 
     // Cast form — explicit generic when the arg's type doesn't
     // match the alias's default `T`.
-    const p1 = v3 as PositionT<V3f>;
+    const p1 = v3 as Position<V3f>;
     expect(p1).toBe(v3);
     expect(p1.x).toBe(1);
 
@@ -104,12 +102,12 @@ describe("Semantic / Builtin runtime constructors", () => {
 
     // Default-generic cast form — works when arg type matches the
     // default. `Position` defaults to `Position<V4f>`.
-    const p3 = v4 as PositionT;
+    const p3 = v4 as Position;
     expect(p3).toBe(v4);
     expect(p3.w).toBe(1);
 
     // FragCoord too.
-    const fc1 = v4 as FragCoordT<V4f>;
+    const fc1 = v4 as FragCoord<V4f>;
     const fc2 = FragCoord(v4);
     expect(fc1).toBe(v4);
     expect(fc2).toBe(v4);
