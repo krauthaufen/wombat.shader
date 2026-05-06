@@ -132,4 +132,44 @@ describe("transformInlineShaders", () => {
     // No closure references — `vec4` and `sin` are intrinsics, not captures.
     expect(r!.code).toMatch(/__wombat_stage\([\s\S]+, \{\}, "[0-9a-f]{16}", \{\}\)/);
   });
+
+  describe("DefaultSemantic builtin recognition on entry outputs", () => {
+    it("vertex `Positions: vec4` → `@builtin(position)` (canonical name)", () => {
+      const src = `
+        import { vertex } from "@aardworx/wombat.shader";
+        declare const ViewProjTrafo: M44f;
+        const vs = vertex((input: { Positions: V3f }) => ({
+          Positions: ViewProjTrafo.mul(new V4f(input.Positions.x, input.Positions.y, input.Positions.z, 1.0)),
+        }));
+      `;
+      const r = transformInlineShaders(src, "/x/app.ts");
+      expect(r).not.toBeNull();
+      // Builtin decoration on the output named `Positions`.
+      expect(r!.code).toMatch(/"name":"Positions"[\s\S]*?"decorations":\[\{"kind":"Builtin","value":"position"\}\]/);
+    });
+
+    it("vertex `gl_Position` still works (legacy spelling)", () => {
+      const src = `
+        import { vertex } from "@aardworx/wombat.shader";
+        declare const ViewProjTrafo: M44f;
+        const vs = vertex((input: { Positions: V3f }) => ({
+          gl_Position: ViewProjTrafo.mul(new V4f(input.Positions.x, input.Positions.y, input.Positions.z, 1.0)),
+        }));
+      `;
+      const r = transformInlineShaders(src, "/x/app.ts");
+      expect(r!.code).toMatch(/"name":"gl_Position"[\s\S]*?"decorations":\[\{"kind":"Builtin","value":"position"\}\]/);
+    });
+
+    it("fragment `Depth: f32` → `@builtin(frag_depth)`", () => {
+      const src = `
+        import { fragment } from "@aardworx/wombat.shader";
+        const fs = fragment((input: { v_uv: V2f }) => ({
+          outColor: new V4f(1.0, 0.0, 0.0, 1.0),
+          Depth: input.v_uv.x,
+        }));
+      `;
+      const r = transformInlineShaders(src, "/x/app.ts");
+      expect(r!.code).toMatch(/"name":"Depth"[\s\S]*?"decorations":\[\{"kind":"Builtin","value":"frag_depth"\}\]/);
+    });
+  });
 });

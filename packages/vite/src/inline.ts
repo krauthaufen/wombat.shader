@@ -713,8 +713,24 @@ function synthesiseOutputs(
 
 function builtinFor(name: string, marker: MarkerName):
   | "position" | "frag_depth" | undefined {
-  if (marker === "vertex" && (name === "gl_Position" || name === "position")) return "position";
-  if (marker === "fragment" && name === "fragDepth") return "frag_depth";
+  // Vertex output that conceptually carries clip-space position.
+  // We accept the WGSL spelling (`position`), the GLSL/historical
+  // one (`gl_Position`), AND the DefaultSemantic-canonical
+  // `Positions` so users can stop spelling builtin names by
+  // hand and just return whatever their semantic vocabulary
+  // already uses everywhere else in the pipeline.
+  if (marker === "vertex") {
+    if (name === "gl_Position" || name === "position" || name === "Positions") {
+      return "position";
+    }
+  }
+  // Fragment depth: the WGSL spelling, the legacy GLSL one, and
+  // the DefaultSemantic name.
+  if (marker === "fragment") {
+    if (name === "fragDepth" || name === "frag_depth" || name === "Depth") {
+      return "frag_depth";
+    }
+  }
   return undefined;
 }
 
