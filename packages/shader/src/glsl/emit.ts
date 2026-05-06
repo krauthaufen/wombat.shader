@@ -606,11 +606,21 @@ export function expr(e: Expr): string {
       return `${expr(e.value)}[${expr(e.index)}]`;
     case "MatrixElement":
       return `${expr(e.matrix)}[${expr(e.col)}][${expr(e.row)}]`;
-    case "MatrixRow":
-      // GLSL has no row accessor; transpose-based pattern is verbose. The
-      // frontend should lower this to MatrixElement before we get here. We
-      // emit a defensive comment and hope upstream legalisation has done it.
-      return `/* MatrixRow not directly representable in GLSL */ ${expr(e.matrix)}[${expr(e.row)}]`;
+    case "MatrixRow": {
+      // Column-major GLSL: a row is built from the c-th element
+      // of each column. Reaches this form only when
+      // `reverseMatrixOps` left a `MatrixRow` (skipMatrixReversal
+      // path); under the default row-major-upload model
+      // `MatrixRow` is rewritten into `MatrixCol`, hitting the
+      // cheap single-column emit below.
+      const m = e.matrix;
+      const cols = m.type.kind === "Matrix" ? m.type.cols : 0;
+      const rIdx = expr(e.row);
+      const t = typeStr(e.type);
+      const parts: string[] = [];
+      for (let c = 0; c < cols; c++) parts.push(`${expr(m)}[${c}][${rIdx}]`);
+      return `${t}(${parts.join(", ")})`;
+    }
     case "MatrixCol":
       return `${expr(e.matrix)}[${expr(e.col)}]`;
     case "NewVector":

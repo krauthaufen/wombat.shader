@@ -901,8 +901,22 @@ export function expr(e: Expr): string {
       return `${expr(e.value)}[${expr(e.index)}]`;
     case "MatrixElement":
       return `${expr(e.matrix)}[${expr(e.col)}][${expr(e.row)}]`;
-    case "MatrixRow":
-      return `/* MatrixRow not directly representable in WGSL */ ${expr(e.matrix)}[${expr(e.row)}]`;
+    case "MatrixRow": {
+      // Standard column-major view: row r is the cross-cut
+      // `vec(M[0][r], M[1][r], …)`. Reaches this emit form only
+      // when `reverseMatrixOps` left a `MatrixRow` in place (the
+      // user opted out via `skipMatrixReversal`); the default
+      // pipeline rewrites `MatrixRow` ↔ `MatrixCol` so the cheap
+      // single-column read covers CPU rows after the row-major-
+      // on-GPU upload trick.
+      const m = e.matrix;
+      const cols = m.type.kind === "Matrix" ? m.type.cols : 0;
+      const rIdx = expr(e.row);
+      const t = typeStr(e.type);
+      const parts: string[] = [];
+      for (let c = 0; c < cols; c++) parts.push(`${expr(m)}[${c}][${rIdx}]`);
+      return `${t}(${parts.join(", ")})`;
+    }
     case "MatrixCol":
       return `${expr(e.matrix)}[${expr(e.col)}]`;
     case "NewVector":

@@ -96,6 +96,19 @@ function rewrite(e: Expr): Expr {
     }
     case "MatrixFromRows":
       return { kind: "MatrixFromCols", cols: e.rows, type: e.type };
+    case "MatrixRow": {
+      // CPU's "row r" lives at GPU column r after the row-major
+      // upload trick (the column-major-interpreted bytes line up
+      // 1:1 with rows of the original CPU matrix). Swap to a
+      // MatrixCol so the standard column-major emit yields `M[r]`.
+      return { kind: "MatrixCol", matrix: e.matrix, col: e.row, type: e.type };
+    }
+    case "MatrixCol": {
+      // Symmetric: CPU's "column c" no longer lines up with a
+      // single GPU vec4 read; emit needs the per-row pick that the
+      // standard `MatrixRow` emit already produces.
+      return { kind: "MatrixRow", matrix: e.matrix, row: e.col, type: e.type };
+    }
     default:
       return e;
   }

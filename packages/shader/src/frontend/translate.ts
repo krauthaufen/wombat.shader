@@ -900,6 +900,28 @@ function translateProperty(node: ts.PropertyAccessExpression, ctx: Ctx): Expr {
   }
   const target = translateExpr(node.expression, ctx);
   const propName = node.name.text;
+  // Matrix row/column access: `m.R0` / `m.C2` lower to MatrixRow /
+  // MatrixCol with a Const index. Mirrors the runtime accessors on
+  // M22f/M33f/M44f. The `R`/`C` letter and digit are validated
+  // against the matrix's dim — `m22.R3` errors out.
+  if (target.type.kind === "Matrix") {
+    const m = parseMatrixAxis(propName);
+    if (m) {
+      const dim = m.kind === "row" ? target.type.rows : target.type.cols;
+      if (m.index >= dim) {
+        addDiagnostic(ctx, node,
+          `frontend: ${m.kind === "row" ? "R" : "C"}${m.index} out of range for ` +
+          `mat${target.type.cols}x${target.type.rows}`);
+      }
+      const vecLen = m.kind === "row" ? target.type.cols : target.type.rows;
+      const elemType: Type = { kind: "Vector", element: target.type.element, dim: vecLen };
+      const indexExpr: Expr = { kind: "Const", value: { kind: "Int", signed: true, value: m.index }, type: Ti32 };
+      if (m.kind === "row") {
+        return { kind: "MatrixRow", matrix: target, row: indexExpr, type: elemType };
+      }
+      return { kind: "MatrixCol", matrix: target, col: indexExpr, type: elemType };
+    }
+  }
   // Recognise swizzle (.x, .xy, .xyz, .rgba etc.)
   if (target.type.kind === "Vector") {
     const swiz = parseSwizzle(propName);
@@ -925,6 +947,21 @@ const SWIZ_INDEX: Record<string, number> = {
   r: 0, g: 1, b: 2, a: 3,
   s: 0, t: 1, p: 2, q: 3,
 };
+
+/**
+ * Parse a matrix axis accessor like `R0` / `C3`. Returns
+ * `undefined` for anything that isn't a single letter `R`/`C`
+ * followed by a single digit 0-3.
+ */
+function parseMatrixAxis(name: string): { kind: "row" | "col"; index: number } | undefined {
+  if (name.length !== 2) return undefined;
+  const k = name[0]!;
+  const d = name[1]!;
+  if (k !== "R" && k !== "C") return undefined;
+  const index = "0123".indexOf(d);
+  if (index < 0) return undefined;
+  return { kind: k === "R" ? "row" : "col", index };
+}
 
 function parseSwizzle(name: string): VecComp[] | undefined {
   if (name.length < 1 || name.length > 4) return undefined;
