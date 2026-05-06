@@ -38,6 +38,7 @@ import {
   type UniformDecl,
   type ValueDef,
 } from "@aardworx/wombat.shader/ir";
+import { BUILTIN_SLOTS } from "@aardworx/wombat.shader/types";
 import { TypeResolver } from "./typeResolver.js";
 import {
   isAmbientDeclaration, isAvalType,
@@ -332,7 +333,22 @@ function transformMarkerCall(
   ].join("\n\n");
 
   const stageKind: StageKind = marker;
-  const entry: EntryRequest = { name: fnName, stage: stageKind };
+  // Brand-aware input / output extraction. Skipped (entry stays
+  // bare) when there's no checker, when the type-inference layers
+  // produced nothing, or for compute stage (which goes through
+  // the second-param `ComputeBuiltins` path).
+  const brandedInputs = checker !== undefined && inferred?.inputType !== undefined
+    ? safeExtractEntryParams(checker, inferred.inputType, stageKind, "in")
+    : undefined;
+  const brandedOutputs = checker !== undefined && inferred?.outputType !== undefined
+    ? safeExtractEntryParams(checker, inferred.outputType, stageKind, "out")
+    : undefined;
+  const entry: EntryRequest = {
+    name: fnName,
+    stage: stageKind,
+    ...(brandedInputs && brandedInputs.length > 0 ? { inputs: brandedInputs } : {}),
+    ...(brandedOutputs && brandedOutputs.length > 0 ? { outputs: brandedOutputs } : {}),
+  };
 
   let module: Module;
   try {
@@ -603,6 +619,10 @@ function withStorageBufferDecls(
 function withDerivedOutputs(module: Module, entryName: string, marker: MarkerName): Module {
   const values = module.values.map((v): ValueDef => {
     if (v.kind !== "Entry" || v.entry.name !== entryName) return v;
+    // Brand-driven outputs already supplied via `EntryRequest.outputs`?
+    // Don't overwrite — the brand walker has more info than the
+    // carrier-walk fallback (semantic names, builtin decorations).
+    if (v.entry.outputs.length > 0) return v;
     const carrier = findReturnCarrier(v.entry.body);
     if (carrier !== undefined) {
       const outputs = synthesiseOutputs(carrier, marker);
@@ -903,7 +923,13 @@ function collectModuleConsts(sf: ts.SourceFile): Map<string, ModuleConst> {
 function inferArrowSignature(
   checker: ts.TypeChecker,
   arrow: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration,
-): { input: ts.TypeNode | undefined; output: ts.TypeNode | undefined } | undefined {
+): {
+  input: ts.TypeNode | undefined;
+  output: ts.TypeNode | undefined;
+  /** The resolved `ts.Type`s, exposed for brand-extraction walks. */
+  inputType: ts.Type | undefined;
+  outputType: ts.Type | undefined;
+} | undefined {
   const isUseless = (t: ts.Type | undefined): boolean => {
     if (t === undefined) return true;
     return (t.flags & (ts.TypeFlags.Unknown | ts.TypeFlags.Any | ts.TypeFlags.Never)) !== 0;
@@ -962,12 +988,280 @@ function inferArrowSignature(
   // and `withDerivedOutputs` can iterate their members.
   const flags = ts.NodeBuilderFlags.NoTruncation | ts.NodeBuilderFlags.WriteArrayAsGenericType;
   const input = inputType !== undefined
-    ? checker.typeToTypeNode(inputType, arrow, flags) ?? undefined
+    ? typeToTypeNodeStrippingBrands(checker, inputType, arrow, flags)
     : undefined;
   const output = outputType !== undefined
-    ? checker.typeToTypeNode(outputType, arrow, flags) ?? undefined
+    ? typeToTypeNodeStrippingBrands(checker, outputType, arrow, flags)
     : undefined;
-  return { input, output };
+  return { input, output, inputType, outputType };
+}
+
+/**
+ * Like `checker.typeToTypeNode`, but when `t` is an object type
+ * with named properties, emit a fresh `TypeLiteralNode` whose
+ * property types have been brand-stripped — `Position<V3f>`
+ * becomes plain `V3f`, `FragDepth` becomes `number`, etc. The
+ * frontend's source-walker (`typeFromNode` /
+ * `inputsFromTypeNode`) doesn't know about the brand aliases and
+ * would otherwise emit `frontend: unknown type reference
+ * "Position"` diagnostics. The brand info itself is recovered
+ * separately via `entryParamsFromObjectType` and threaded into
+ * `EntryRequest.inputs` / `outputs`, so no info is lost.
+ */
+function typeToTypeNodeStrippingBrands(
+  checker: ts.TypeChecker,
+  t: ts.Type,
+  enclosing: ts.Node,
+  flags: ts.NodeBuilderFlags,
+): ts.TypeNode | undefined {
+  const props = t.getProperties().filter(
+    (p) => p.name !== SEMANTIC_KEY && p.name !== BUILTIN_KEY,
+  );
+  if (props.length === 0) {
+    // No properties (or only brand props) — fall back to direct
+    // emit. `unknown` etc. flow through here.
+    return checker.typeToTypeNode(t, enclosing, flags) ?? undefined;
+  }
+  const members: ts.TypeElement[] = [];
+  for (const prop of props) {
+    const decl = prop.valueDeclaration ?? prop.declarations?.[0];
+    if (!decl) continue;
+    const propType = checker.getTypeOfSymbolAtLocation(prop, decl);
+    const stripped = stripBrandIntersection(propType);
+    // `checker.typeToTypeNode(stripped, …)` would re-emit the
+    // original alias name (`Position<V3f>`) because TS holds onto
+    // `aliasSymbol`, defeating the strip. Bypass: convert to our
+    // IR type and back to a canonical-name TypeNode (V3f, V4f,
+    // number, …) so the frontend's source-walker resolves it via
+    // `tryResolveTypeName`.
+    const ir = tsTypeToIR(stripped, checker);
+    const typeNode = ir
+      ? irTypeToTsTypeNode(ir)
+      : checker.typeToTypeNode(stripped, enclosing, flags);
+    if (!typeNode) continue;
+    members.push(
+      ts.factory.createPropertySignature(
+        undefined,
+        ts.factory.createIdentifier(prop.name),
+        undefined,
+        typeNode,
+      ),
+    );
+  }
+  return ts.factory.createTypeLiteralNode(members);
+}
+
+/**
+ * Render an IR `Type` back into a TS `TypeNode` whose name the
+ * frontend's `tryResolveTypeName` knows. Inverse of `tsTypeToIR`
+ * for the closed set of types the brand walker actually
+ * encounters.
+ */
+function irTypeToTsTypeNode(t: Type): ts.TypeNode | undefined {
+  switch (t.kind) {
+    case "Bool":
+      return ts.factory.createKeywordTypeNode(ts.SyntaxKind.BooleanKeyword);
+    case "Float":
+      return ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword);
+    case "Int": {
+      // Frontend understands `i32`/`u32` as type-reference shorthands.
+      const name = t.signed ? "i32" : "u32";
+      return ts.factory.createTypeReferenceNode(name);
+    }
+    case "Vector": {
+      const elem = t.element;
+      let prefix: string;
+      if (elem.kind === "Float") prefix = "V";
+      else if (elem.kind === "Int" && elem.signed) prefix = "V";
+      else if (elem.kind === "Int" && !elem.signed) prefix = "V";
+      else if (elem.kind === "Bool") prefix = "V";
+      else return undefined;
+      const suffix = elem.kind === "Float" ? "f"
+        : elem.kind === "Int" && elem.signed ? "i"
+        : elem.kind === "Int" ? "ui"
+        : "b";
+      return ts.factory.createTypeReferenceNode(`${prefix}${t.dim}${suffix}`);
+    }
+    case "Matrix": {
+      // M{rows}{cols}f — square matrices use the short MNNf form,
+      // rectangular ones use MRowsColsF.
+      if (t.element.kind !== "Float") return undefined;
+      const name = t.rows === t.cols ? `M${t.rows}${t.cols}f` : `M${t.rows}${t.cols}f`;
+      return ts.factory.createTypeReferenceNode(name);
+    }
+    case "Void":
+      return ts.factory.createKeywordTypeNode(ts.SyntaxKind.VoidKeyword);
+    default:
+      return undefined;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Semantic / Builtin brand extraction
+//
+// `Semantic<T, N>` and `Builtin<T, K>` (from
+// `@aardworx/wombat.shader/types`) lower to intersection types of
+// the form `T & { readonly __wombat_semantic: "N" }` (or
+// `__wombat_builtin`). The plain-string property key is what makes
+// this walk straightforward — `unique symbol` keys would route
+// through synthetic escaped names that vary across TS versions.
+//
+// Returns `{ semantic?, builtin?, baseType }` where `baseType` is
+// the type with brand intersection constituents stripped — so the
+// caller's `tsTypeToIR` resolves against the underlying T (V3f /
+// V4f / number / …) rather than the branded form.
+// ─────────────────────────────────────────────────────────────────────
+
+interface BrandInfo {
+  readonly semantic?: string;
+  readonly builtin?: string;
+  readonly baseType: ts.Type;
+}
+
+const SEMANTIC_KEY = "__wombat_semantic";
+const BUILTIN_KEY = "__wombat_builtin";
+
+function extractBrand(checker: ts.TypeChecker, t: ts.Type): BrandInfo {
+  // Walk the property table for our brand markers. Works for both
+  // intersection types (where the props come from one constituent)
+  // and direct object types — TS exposes the same flat property
+  // list either way.
+  let semantic: string | undefined;
+  let builtin: string | undefined;
+  for (const prop of t.getProperties()) {
+    const name = prop.name;
+    if (name !== SEMANTIC_KEY && name !== BUILTIN_KEY) continue;
+    const decl = prop.valueDeclaration ?? prop.declarations?.[0];
+    if (!decl) continue;
+    const propType = checker.getTypeOfSymbolAtLocation(prop, decl);
+    if (!propType.isStringLiteral()) continue;
+    if (name === SEMANTIC_KEY) semantic = propType.value;
+    else builtin = propType.value;
+  }
+  return {
+    ...(semantic !== undefined ? { semantic } : {}),
+    ...(builtin !== undefined ? { builtin } : {}),
+    baseType: stripBrandIntersection(t),
+  };
+}
+
+/**
+ * If `t` is an intersection like `V3f & { __wombat_semantic: "X" }`,
+ * return just the `V3f` constituent. Otherwise return `t` unchanged.
+ * The brand carrier is identified by having either of the two
+ * brand keys as its only meaningful property.
+ */
+function stripBrandIntersection(t: ts.Type): ts.Type {
+  if (!t.isIntersection()) return t;
+  const survivors = t.types.filter((c) => !isBrandCarrier(c));
+  if (survivors.length === 0) return t;
+  if (survivors.length === 1) return survivors[0]!;
+  // Multiple non-brand constituents — fall back to the original
+  // type (the caller's `tsTypeToIR` handles intersection objects
+  // by reading their properties, which now include the brand
+  // markers but those start with `__` so they're harmless).
+  return t;
+}
+
+function isBrandCarrier(t: ts.Type): boolean {
+  // A constituent that contributes ONLY brand keys to the
+  // intersection — i.e., its own property list is a subset of
+  // {SEMANTIC_KEY, BUILTIN_KEY}.
+  for (const prop of t.getProperties()) {
+    if (prop.name !== SEMANTIC_KEY && prop.name !== BUILTIN_KEY) return false;
+  }
+  return true;
+}
+
+/**
+ * `(stage, direction)`-validated `BUILTIN_SLOTS` lookup. Returns
+ * `undefined` if the builtin is allowed; an error message
+ * otherwise. The plugin surfaces this as a build-time error so
+ * users can't accidentally land a `FragCoord` on a vertex output
+ * etc. and find out only when WebGPU's pipeline-creation rejects
+ * the shader async.
+ */
+function validateBuiltinSlot(
+  builtin: string,
+  stage: "vertex" | "fragment" | "compute",
+  direction: "in" | "out",
+): string | undefined {
+  const slots = BUILTIN_SLOTS[builtin];
+  if (slots === undefined) return undefined; // unknown — forward-compat
+  if (slots.some((s) => s.stage === stage && s.direction === direction)) {
+    return undefined;
+  }
+  const legal = slots.map((s) => `${s.stage}-${s.direction}`).join(", ");
+  return `@builtin(${builtin}) not allowed on ${stage}-${direction}; legal slots: ${legal}`;
+}
+
+function safeExtractEntryParams(
+  checker: ts.TypeChecker,
+  t: ts.Type,
+  stage: "vertex" | "fragment" | "compute",
+  direction: "in" | "out",
+): EntryParameter[] | undefined {
+  // Object-shaped only — anything else (a bare V4f return, a void
+  // input, etc.) falls through to the existing carrier-walk path.
+  if (t.getProperties().length === 0) return undefined;
+  return entryParamsFromObjectType(checker, t, stage, direction);
+}
+
+/**
+ * Walk an object-shaped TS type and produce one `EntryParameter`
+ * per property, with semantic / builtin info recovered from the
+ * `Semantic<T, N>` / `Builtin<T, K>` brands when present.
+ *
+ * `direction` ("in" | "out") + `stage` are used purely for the
+ * `BUILTIN_SLOTS` validation step — a brand declaring
+ * `FragCoord` on a vertex output throws here instead of further
+ * downstream.
+ */
+function entryParamsFromObjectType(
+  checker: ts.TypeChecker,
+  objType: ts.Type,
+  stage: "vertex" | "fragment" | "compute",
+  direction: "in" | "out",
+): EntryParameter[] {
+  const out: EntryParameter[] = [];
+  let nextLoc = 0;
+  for (const prop of objType.getProperties()) {
+    const name = prop.name;
+    if (name === SEMANTIC_KEY || name === BUILTIN_KEY) continue;
+    const decl = prop.valueDeclaration ?? prop.declarations?.[0];
+    if (!decl) continue;
+    const propType = checker.getTypeOfSymbolAtLocation(prop, decl);
+    const brand = extractBrand(checker, propType);
+    const ir = tsTypeToIR(brand.baseType, checker);
+    if (!ir) continue;
+    const decorations: ParamDecoration[] = [];
+    let semantic: string;
+    if (brand.builtin !== undefined) {
+      const err = validateBuiltinSlot(brand.builtin, stage, direction);
+      if (err) {
+        throw new Error(`wombat.shader: field "${name}": ${err}`);
+      }
+      decorations.push({ kind: "Builtin", value: brand.builtin as import("@aardworx/wombat.shader/ir").BuiltinSemantic });
+      semantic = brand.builtin;
+    } else if (brand.semantic !== undefined) {
+      decorations.push({ kind: "Location", value: nextLoc++ });
+      semantic = brand.semantic;
+    } else {
+      // No brand — fall back to the existing name-based defaults.
+      // The plugin's name-based `builtinFor` resolver still applies
+      // for legacy spellings (gl_Position, fragDepth, …).
+      const builtin = builtinFor(name, stage === "vertex" ? "vertex" : stage === "fragment" ? "fragment" : "compute");
+      if (builtin !== undefined && direction === "out") {
+        decorations.push({ kind: "Builtin", value: builtin });
+        semantic = builtin;
+      } else {
+        decorations.push({ kind: "Location", value: nextLoc++ });
+        semantic = capitalise(stripInterpolantPrefix(name));
+      }
+    }
+    out.push({ name, type: ir, semantic, decorations });
+  }
+  return out;
 }
 
 function synthesiseFunctionSource(
@@ -979,10 +1273,16 @@ function synthesiseFunctionSource(
 ): string {
   const printer = ts.createPrinter({ removeComments: true });
   const params = arrow.parameters.map((p, i) => {
-    // Use the parameter's own annotation when present; otherwise
-    // fall back to the marker's first generic type argument for
-    // the first parameter.
-    const type = p.type ?? (i === 0 ? fallbackInputType : undefined);
+    // For the first parameter we PREFER the brand-stripped fallback
+    // over the user's annotation: the fallback was built by
+    // `typeToTypeNodeStrippingBrands` (via `inferArrowSignature`),
+    // which expands `Position<V3f>` etc. to plain `V3f` so the
+    // frontend's source-walker doesn't choke on the unknown alias
+    // names. Brand info is recovered separately via
+    // `entryParamsFromObjectType` and threaded through
+    // `EntryRequest.inputs/outputs`. Other parameters keep their
+    // annotation untouched.
+    const type = i === 0 ? (fallbackInputType ?? p.type) : p.type;
     return ts.factory.createParameterDeclaration(
       undefined, undefined, p.name, p.questionToken, type, p.initializer,
     );
@@ -995,8 +1295,10 @@ function synthesiseFunctionSource(
   const body = ts.isBlock(rawBody)
     ? rawBody
     : ts.factory.createBlock([ts.factory.createReturnStatement(rawBody)], true);
-  // Same fallback for the return type — generic arg #1.
-  const returnType = arrow.type ?? fallbackReturnType;
+  // Same fallback for the return type, with the same brand-strip
+  // priority — `fallbackReturnType` already had brand aliases
+  // expanded to their underlying T.
+  const returnType = fallbackReturnType ?? arrow.type;
   const fn = ts.factory.createFunctionDeclaration(
     undefined,
     undefined,

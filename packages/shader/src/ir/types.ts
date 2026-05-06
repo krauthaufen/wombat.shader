@@ -354,7 +354,7 @@ export interface BindingPoint {
 
 export type BuiltinSemantic =
   | "position" | "vertex_index" | "instance_index"
-  | "front_facing" | "frag_depth"
+  | "front_facing" | "sample_index" | "sample_mask" | "frag_depth"
   | "global_invocation_id" | "local_invocation_id" | "local_invocation_index"
   | "workgroup_id" | "num_workgroups";
 
