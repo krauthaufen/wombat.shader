@@ -26,12 +26,14 @@ import {
   inferStorageAccess,
   inlinePass,
   legaliseTypes,
+  instanceUniforms,
   liftReturns,
   linkCrossStage,
   linkFragmentOutputs,
   pruneCrossStage,
   reduceUniforms,
   reverseMatrixOps,
+  simplifyTranspose,
   type FragmentOutputLayout,
 } from "../passes/index.js";
 import { emitGlsl, type EmitResult as GlslEmitResult } from "../glsl/index.js";
@@ -122,6 +124,20 @@ export interface CompileOptions {
    * locations — only fragment outputs are re-pinned.
    */
   readonly fragmentOutputLayout?: FragmentOutputLayout;
+  /**
+   * Auto-instancing rewrite. When set, the named uniforms become
+   * per-instance vertex attributes via the `instanceUniforms` IR
+   * pass — see `passes/instanceUniforms.ts`. Runs after `liftReturns`
+   * but before `composeStages` so subsequent linking / pruning sees
+   * the rewritten reads + the synth varyings the rewrite emits.
+   *
+   * Special-cased trafo aliases (`ModelTrafo` / inverses /
+   * `NormalMatrix`) trigger only when `"ModelTrafo"` is in the set;
+   * the runtime is then expected to pre-multiply the scope's
+   * accumulated `ModelTrafo` into each per-instance trafo and bind
+   * the leaf's `ModelTrafo` uniform to identity.
+   */
+  readonly instanceAttributes?: ReadonlySet<string>;
 }
 
 export function compileShaderSource(
@@ -159,6 +175,26 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
   // matches on is non-enumerable; spread-clones in later passes would
   // strip it.
   let m = liftReturns(module);
+  // Auto-instancing rewrite — runs ON the merged module so
+  // FS-reads-detection sees the FS entries the VS rewrite needs to
+  // synthesise varyings for.
+  if (options.instanceAttributes && options.instanceAttributes.size > 0) {
+    const uniformTypes = new Map<string, import("../ir/index.js").Type>();
+    for (const v of m.values) {
+      if (v.kind === "Uniform") for (const u of v.uniforms) uniformTypes.set(u.name, u.type);
+    }
+    m = instanceUniforms(m, options.instanceAttributes, uniformTypes);
+    // Algebraic Transpose-propagation runs BEFORE CSE so we can push
+    // `Transpose` through `MatrixFromCols/Rows`, distribute over
+    // `MulMatMat`, and cancel `T(T(X))` while the IR is still in its
+    // pre-CSE inlined form. Once CSE binds intermediate matrices into
+    // local lets, `Transpose(localVar)` becomes opaque to the
+    // propagation rules and the transpose has to fall back to a real
+    // `transpose(...)` call at emit. (See `passes/simplifyTranspose.ts`
+    // for the rules; `passes/reverseMatrixOps.ts` does the row/col-vec
+    // form swaps that absorb any leaf-level Transpose that survives.)
+    m = simplifyTranspose(m);
+  }
   if (!options.skipOptimisations) {
     m = composeStages(m);
     // FShade-style cross-stage linker: matches VS outputs <-> FS inputs
@@ -215,7 +251,9 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
   // Row-major → column-major reversal for matrix ops. Runs late so
   // composeStages / inlinePass / etc. operate on the canonical
   // row-major form; the reversal is a final adjustment for the GPU's
-  // memory-layout convention.
+  // memory-layout convention. `simplifyTranspose` already ran above
+  // (before CSE); `reverseMatrixOps` absorbs any surviving leaf-level
+  // Transpose into the row/col-vec operand-flip rules.
   if (!options.skipMatrixReversal) m = reverseMatrixOps(m);
   m = legaliseTypes(m, options.target);
   return emitAll(m, options.target);

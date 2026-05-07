@@ -29,6 +29,9 @@ export type { LayoutInfo, LayoutTarget, FieldLayout } from "./layout.js";
 export { computeLayout } from "./layout.js";
 
 export { stage, effect, vertex, fragment, compute, computeShader } from "./stage.js";
+export { instanceEffect } from "./instanceEffect.js";
+export { effectFromWgsl } from "./rawWgsl.js";
+export type { RawWgslOptions } from "./rawWgsl.js";
 export type {
   Stage, Effect, ComputeShader,
   HoleGetter, HoleGetters,
