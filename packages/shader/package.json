@@ -54,7 +54,7 @@
     "src"
   ],
   "dependencies": {
-    "@aardworx/wombat.base": "^0.4.0"
+    "@aardworx/wombat.base": "^0.4.2"
   },
   "publishConfig": {
     "access": "public"
