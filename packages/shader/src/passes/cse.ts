@@ -31,7 +31,26 @@ export function cse(module: Module): Module {
   return { ...module, values };
 }
 
+/**
+ * Counter scope for `_cseN` temp names. Held in module-private state
+ * during a single `cseStmt` call so that nested Sequential / Isolated
+ * blocks within the same function body produce non-colliding names.
+ *
+ * Without this, a function whose body contains two same-level
+ * Sequentials would emit two independent `_cse0..N` runs, and the
+ * WGSL parser rejects the resulting redeclarations.
+ */
+let cseCounter = 0;
+
 export function cseStmt(s: Stmt): Stmt {
+  // Reset the counter at the top of every function-body call. Recursive
+  // calls within (via `liftBlock`) share the same counter so nested
+  // Sequentials don't collide.
+  cseCounter = 0;
+  return cseStmtInner(s);
+}
+
+function cseStmtInner(s: Stmt): Stmt {
   switch (s.kind) {
     case "Sequential":
     case "Isolated": {
@@ -39,13 +58,13 @@ export function cseStmt(s: Stmt): Stmt {
       return { ...s, body: lifted };
     }
     default:
-      return mapStmtChildren(s, { stmt: cseStmt });
+      return mapStmtChildren(s, { stmt: cseStmtInner });
   }
 }
 
 function liftBlock(body: readonly Stmt[]): readonly Stmt[] {
   // First, recurse into every child statement.
-  const recursed = body.map(cseStmt);
+  const recursed = body.map(cseStmtInner);
 
   // Pass 1: count occurrences of each pure expression.
   const counts = new Map<string, { expr: Expr; count: number }>();
@@ -67,11 +86,10 @@ function liftBlock(body: readonly Stmt[]): readonly Stmt[] {
   // expression for each.
   const allocated = new Map<string, Var>();
   const origExprByKey = new Map<string, Expr>();
-  let counter = 0;
   for (const c of candidates) {
     const k = hash(c.expr);
     const tmp: Var = {
-      name: `_cse${counter++}`,
+      name: `_cse${cseCounter++}`,
       type: c.expr.type,
       mutable: false,
     };
