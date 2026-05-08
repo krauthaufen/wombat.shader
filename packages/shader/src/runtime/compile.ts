@@ -28,6 +28,7 @@ import {
   legaliseTypes,
   instanceUniforms,
   liftReturns,
+  assignLocations,
   linkCrossStage,
   linkFragmentOutputs,
   pruneCrossStage,
@@ -175,6 +176,15 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
   // matches on is non-enumerable; spread-clones in later passes would
   // strip it.
   let m = liftReturns(module);
+  // Centralised Location assignment. Frontends (parseShader, the Vite
+  // inline plugin, the F# Fable plugin) emit entry parameters with
+  // empty `decorations` for non-builtin I/O; this pass numbers them
+  // monotonically per entry/direction so every downstream pass that
+  // scans for `Location` decorations (composeStages, linkCrossStage,
+  // extractHelpers.renumberLocations, the WGSL/GLSL emitters) sees a
+  // fully-located IR. Idempotent: parameters that already carry a
+  // Location are left alone.
+  m = assignLocations(m);
   // Auto-instancing rewrite — runs ON the merged module so
   // FS-reads-detection sees the FS entries the VS rewrite needs to
   // synthesise varyings for.

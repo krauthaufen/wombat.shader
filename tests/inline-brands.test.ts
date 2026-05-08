@@ -178,7 +178,11 @@ describe("inline plugin: Semantic / Builtin brand consumption", () => {
     `;
     const code = transform(src);
     const json = templateJson(code);
-    expect(json).toMatch(/"name":"pos"[\s\S]*?"semantic":"Positions"[\s\S]*?"decorations":\[\{"kind":"Location"/);
+    // Frontends ship the IR with empty `decorations` for non-builtin
+    // I/O; locations are assigned by the central `assignLocations`
+    // pass at compile time. The semantic stays "Positions" so the
+    // pass-through linker can match by name when the FS reads it.
+    expect(json).toMatch(/"name":"pos"[\s\S]*?"semantic":"Positions"[\s\S]*?"decorations":\[\]/);
   });
 
   it("`Position<V3f>` on a vertex INPUT stays a vertex attribute (Location, not builtin)", () => {
@@ -192,10 +196,11 @@ describe("inline plugin: Semantic / Builtin brand consumption", () => {
     `;
     const code = transform(src);
     const json = templateJson(code);
-    // Input `pos` is a vertex attribute → Location-decorated.
-    expect(json).toMatch(/"name":"pos"[\s\S]*?"decorations":\[\{"kind":"Location","value":0\}\]/);
-    // Semantic stays "Positions" so the runtime can match the
+    // Frontends emit non-builtin I/O with empty `decorations`; the
+    // `assignLocations` pass numbers them at compile time. The
+    // semantic stays "Positions" so the runtime can match the
     // attribute slot regardless of field name.
+    expect(json).toMatch(/"name":"pos"[\s\S]*?"decorations":\[\]/);
     expect(json).toMatch(/"name":"pos"[\s\S]*?"semantic":"Positions"/);
   });
 

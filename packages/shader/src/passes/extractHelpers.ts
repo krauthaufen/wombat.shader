@@ -105,15 +105,33 @@ export interface ExtractedFusion {
  * `result.wrapperEntry` as the new entry).
  */
 export function extractFusedEntry(
-  operands: readonly EntryDef[],
+  operandsRaw: readonly EntryDef[],
   fusedName: string,
 ): ExtractedFusion {
-  if (operands.length === 0) {
+  if (operandsRaw.length === 0) {
     throw new Error("extractFusedEntry: at least one operand required");
   }
-  if (!operands.every((o) => o.stage === operands[0]!.stage)) {
+  if (!operandsRaw.every((o) => o.stage === operandsRaw[0]!.stage)) {
     throw new Error("extractFusedEntry: all operands must share a stage");
   }
+  // Canonicalise port names by semantic. Cross-stage linking already
+  // matches by paramKey (semantic ?? name); same-stage fusion needs
+  // the same alignment so that e.g. an FShade-style `[<Color>]`
+  // output (name="Color", semantic="Colors") and a TS-style sink
+  // (name="outColor", semantic="Colors") fold into one State field
+  // and pipe correctly. Without this, names diverge and the merged
+  // entry surfaces both as separate ports — the second appears as a
+  // phantom FS input with no VS counterpart, which the WGSL linker
+  // rejects.
+  //
+  // First-occurrence wins: walk the operands left-to-right, and for
+  // every input/output, lock in `(semantic, type) → canonicalName`
+  // from the first port that introduces that semantic. Subsequent
+  // ports with a matching semantic adopt the canonical name (in the
+  // EntryParameter and in every body Read/Write referring to them).
+  // Ports with empty semantic stay name-keyed (paramKey falls back
+  // to name).
+  const operands = canonicaliseBySemantic(operandsRaw);
   const stage = operands[0]!.stage;
 
   // Merged ports: every input + every output across all operands,
@@ -457,6 +475,93 @@ function renumberLocations(params: readonly EntryParameter[]): EntryParameter[] 
     }
   }
   return needsRemap ? out : [...params];
+}
+
+/**
+ * Build a `oldName → canonicalName` rename map keyed on `semantic`.
+ * The semantic value itself becomes the canonical name — by
+ * definition the semantic IS the canonical name in the wombat /
+ * FShade vocabulary, so a port with `name="Color", semantic="Colors"`
+ * (Aardvark's `[<Color>]` shape) and another with
+ * `name="Colors", semantic="Colors"` (TS-direct shape) both fold
+ * onto the canonical `"Colors"`. This also keeps the merged
+ * fragment output discoverable by the framebuffer signature, which
+ * uses the semantic as its color-attachment key. Builtins are
+ * excluded — they're keyed by their `Builtin` decoration value
+ * elsewhere, not by semantic. Ports without a semantic stay
+ * untouched (name is already their key).
+ *
+ * Constraints: types must match across operands sharing a semantic.
+ * Type-mismatch is a real error and surfaces later as an
+ * `extractFusedEntry: port "X" has conflicting types …` after the
+ * rename folds them into one State field.
+ */
+function canonicaliseBySemantic(operands: readonly EntryDef[]): readonly EntryDef[] {
+  // Pick a canonical name for each semantic only when SOME operand
+  // already names a port after its semantic — that operand is taken
+  // as authoritative and other operands' synonyms get rewritten to
+  // match. Never invent a canonical: if no operand has
+  // `name === semantic`, leave the names alone (avoids breaking
+  // synthetic IRs where multiple ports share a semantic but have
+  // distinct names that callers depend on).
+  const semToCanonical = new Map<string, string>();
+  const collect = (p: EntryParameter): void => {
+    if (!p.semantic || p.semantic.length === 0) return;
+    if ((p.decorations ?? []).some((d) => d.kind === "Builtin")) return;
+    if (p.name === p.semantic && !semToCanonical.has(p.semantic)) {
+      semToCanonical.set(p.semantic, p.semantic);
+    }
+  };
+  for (const op of operands) {
+    for (const p of op.inputs) collect(p);
+    for (const p of op.outputs) collect(p);
+  }
+  // Build per-operand `oldName → canonicalName` map; any port whose
+  // canonical differs from its current name will be rewritten.
+  const renameOp = (op: EntryDef): EntryDef => {
+    const renames = new Map<string, string>();
+    const fixParam = (p: EntryParameter): EntryParameter => {
+      if (!p.semantic || p.semantic.length === 0) return p;
+      if ((p.decorations ?? []).some((d) => d.kind === "Builtin")) return p;
+      const canon = semToCanonical.get(p.semantic);
+      if (canon === undefined || canon === p.name) return p;
+      renames.set(p.name, canon);
+      return { ...p, name: canon };
+    };
+    const newInputs = op.inputs.map(fixParam);
+    const newOutputs = op.outputs.map(fixParam);
+    if (renames.size === 0) {
+      return op.inputs === newInputs && op.outputs === newOutputs
+        ? op
+        : { ...op, inputs: newInputs, outputs: newOutputs };
+    }
+    const rewriteExpr = (e: Expr): Expr => {
+      if (e.kind === "ReadInput" && e.scope === "Input") {
+        const r = renames.get(e.name);
+        if (r !== undefined) return { ...e, name: r };
+      }
+      return e;
+    };
+    const rewriteLExpr = (l: LExpr): LExpr => {
+      if (l.kind === "LInput" && l.scope === "Input") {
+        const r = renames.get(l.name);
+        if (r !== undefined) return { ...l, name: r };
+      }
+      return l;
+    };
+    const rewriteStmt = (s: Stmt): Stmt => {
+      if (s.kind === "WriteOutput") {
+        const r = renames.get(s.name);
+        if (r !== undefined) return { ...s, name: r };
+      }
+      return s;
+    };
+    const newBody = mapStmt(op.body, {
+      expr: rewriteExpr, lexpr: rewriteLExpr, stmt: rewriteStmt,
+    });
+    return { ...op, inputs: newInputs, outputs: newOutputs, body: newBody };
+  };
+  return operands.map(renameOp);
 }
 
 /**

@@ -9,7 +9,6 @@ import type {
   FunctionSignature,
   Module,
   Parameter,
-  ParamDecoration,
   Stage,
   Type,
   ValueDef,
@@ -334,19 +333,20 @@ function parseWorkgroupSizeJsdoc(node: ts.Node): readonly [number, number?, numb
 function inputsFromTypeNode(node: ts.TypeNode): EntryParameter[] {
   if (ts.isTypeLiteralNode(node)) {
     const out: EntryParameter[] = [];
-    let nextLoc = 0;
     for (const member of node.members) {
       if (!ts.isPropertySignature(member)) continue;
       if (!member.name || !ts.isIdentifier(member.name)) continue;
       if (!member.type) continue;
       const t = typeFromNodeShallow(member.type);
       if (!t) continue;
-      const decorations: ParamDecoration[] = [{ kind: "Location", value: nextLoc++ }];
+      // Locations assigned centrally by the `assignLocations` pass at
+      // compile time. Frontends only declare semantics + builtins; the
+      // pass numbers what's left.
       out.push({
         name: member.name.text,
         type: t,
         semantic: capitalise(member.name.text),
-        decorations,
+        decorations: [],
       });
     }
     return out;

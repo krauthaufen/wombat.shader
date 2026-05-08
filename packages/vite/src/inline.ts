@@ -698,7 +698,10 @@ function bareV4fOutputFor(marker: MarkerName, type: Type): EntryParameter | unde
       name: "outColor",
       type,
       semantic: "Color",
-      decorations: [{ kind: "Location", value: 0 }],
+      // Location pinned centrally — `linkFragmentOutputs` stamps it
+      // from the framebuffer signature, or `assignLocations` numbers
+      // it as the sole undecorated FS output.
+      decorations: [],
     };
   }
   return undefined;
@@ -729,15 +732,16 @@ function synthesiseOutputs(
   marker: MarkerName,
 ): EntryParameter[] {
   const out: EntryParameter[] = [];
-  let nextLoc = 0;
   for (const [name, expr] of fields) {
     const decorations: ParamDecoration[] = [];
     const builtin = builtinFor(name, marker);
     if (builtin) {
       decorations.push({ kind: "Builtin", value: builtin });
-    } else {
-      decorations.push({ kind: "Location", value: nextLoc++ });
     }
+    // Non-builtin outputs leave decorations empty: locations are
+    // assigned by the `assignLocations` pass (and FS outputs are
+    // re-stamped by `linkFragmentOutputs` from the framebuffer
+    // signature).
     out.push({
       name,
       type: expr.type,
@@ -1316,7 +1320,6 @@ function entryParamsFromObjectType(
   direction: "in" | "out",
 ): EntryParameter[] {
   const out: EntryParameter[] = [];
-  let nextLoc = 0;
   for (const prop of objType.getProperties()) {
     const name = prop.name;
     if (name === SEMANTIC_KEY || name === BUILTIN_KEY) continue;
@@ -1341,24 +1344,23 @@ function entryParamsFromObjectType(
       // vertex output, `Depth` on a fragment output, etc. Promote
       // those to `@builtin(K)` so users can spell the friendly
       // semantic alias instead of switching to a separate
-      // `Builtin` brand.
+      // `Builtin` brand. Non-builtin locations are filled in by the
+      // central `assignLocations` pass at compile time.
       const promoted = semanticToBuiltin(brand.semantic, stage, direction);
       if (promoted !== undefined) {
         decorations.push({ kind: "Builtin", value: promoted as import("@aardworx/wombat.shader/ir").BuiltinSemantic });
-      } else {
-        decorations.push({ kind: "Location", value: nextLoc++ });
       }
       semantic = brand.semantic;
     } else {
       // No brand — fall back to the existing name-based defaults.
       // The plugin's name-based `builtinFor` resolver still applies
-      // for legacy spellings (gl_Position, fragDepth, …).
+      // for legacy spellings (gl_Position, fragDepth, …); everything
+      // else gets its location from the central pass.
       const builtin = builtinFor(name, stage === "vertex" ? "vertex" : stage === "fragment" ? "fragment" : "compute");
       if (builtin !== undefined && direction === "out") {
         decorations.push({ kind: "Builtin", value: builtin });
         semantic = builtin;
       } else {
-        decorations.push({ kind: "Location", value: nextLoc++ });
         semantic = capitalise(stripInterpolantPrefix(name));
       }
     }
