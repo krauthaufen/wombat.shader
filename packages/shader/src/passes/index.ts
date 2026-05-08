@@ -64,4 +64,7 @@ export {
   substInput,
   substVars,
   substVarsExpr,
+  substituteInputs,
+  substituteUniforms,
+  substituteAttributes,
 } from "./substitute.js";
