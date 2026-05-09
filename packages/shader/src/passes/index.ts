@@ -28,6 +28,7 @@ export { reverseMatrixOps } from "./reverseMatrixOps.js";
 export { simplifyTranspose } from "./simplifyTranspose.js";
 export { relinkVars } from "./relinkVars.js";
 export { extractFusedEntry, extractSingleEntry } from "./extractHelpers.js";
+export { pruneToStage } from "./pruneToStage.js";
 export { linkHelpers } from "./linkHelpers.js";
 
 export {

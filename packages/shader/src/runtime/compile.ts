@@ -32,6 +32,7 @@ import {
   linkCrossStage,
   linkFragmentOutputs,
   pruneCrossStage,
+  pruneToStage,
   reduceUniforms,
   reverseMatrixOps,
   simplifyTranspose,
@@ -279,8 +280,16 @@ function emitAll(module: Module, target: Target): CompiledEffect {
 
   for (const v of module.values) {
     if (v.kind !== "Entry") continue;
+    // Tree-shake the module to just what this stage's entry transitively
+    // calls. Without this, an FS module that shares a wombat IR Module
+    // with VS helper functions (produced by `extractFusedEntry` during
+    // same-stage composition) ends up emitting those VS helpers into the
+    // FS WGSL — they reference VS-only `var<private>` globals / VS-side
+    // `ReadInput("Input", …)` slots that don't exist in the FS module,
+    // and Tint rejects the WGSL with `unresolved value`.
+    const stageModule = pruneToStage(module, v.entry.stage);
     if (target === "glsl") {
-      const r = emitGlsl(module, v.entry.name);
+      const r = emitGlsl(stageModule, v.entry.name);
       const sourceMap = anyMapped(r.lineSpans)
         ? buildSourceMap({ lineSpans: r.lineSpans, fileContents })
         : null;
@@ -293,7 +302,7 @@ function emitAll(module: Module, target: Target): CompiledEffect {
         ...(r.meta.workgroupSize ? { workgroupSize: r.meta.workgroupSize } : {}),
       });
     } else {
-      const r = emitWgsl(module, v.entry.name);
+      const r = emitWgsl(stageModule, v.entry.name);
       const sourceMap = anyMapped(r.lineSpans)
         ? buildSourceMap({ lineSegments: r.lineSegments, fileContents })
         : null;

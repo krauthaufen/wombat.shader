@@ -60,7 +60,13 @@ describe("inline shader: helper functions", () => {
     expect(fnNames).toContain("quart");
   });
 
-  it("helper compiles end-to-end into WGSL with the helper function emitted", () => {
+  it("helper compiles end-to-end into WGSL (calls inlined, body folded into entry)", () => {
+    // Originally this test asserted that the WGSL contained `fn half(`
+    // verbatim; that was a side-effect of the per-stage emit emitting
+    // EVERY Function ValueDef regardless of whether the entry still
+    // called it. The default inline policy fully inlines the helper,
+    // so after `pruneToStage` the dead function is correctly dropped
+    // and the entry body inlines `(x * 0.5f)` directly.
     const src = `
       import { fragment } from "@aardworx/wombat.shader";
       function half(x: number): number { return x * 0.5; }
@@ -72,8 +78,12 @@ describe("inline shader: helper functions", () => {
     const tmpl = extractTemplate(r.code);
     const fx = effect(stage(tmpl));
     const wgsl = fx.compile({ target: "wgsl" }).stages[0]!.source;
-    expect(wgsl).toContain("fn half(");
-    expect(wgsl).toContain("half(");
+    // Inlined arithmetic survives.
+    expect(wgsl).toContain("* 0.5f");
+    // The `half` helper was inlined and tree-shaken — no dangling decl
+    // and no leftover call in the emitted WGSL.
+    expect(wgsl).not.toContain("fn half(");
+    expect(wgsl).not.toMatch(/\bhalf\(/);
   });
 
   it("`const fn = (…) => …` arrow helper works the same way", () => {

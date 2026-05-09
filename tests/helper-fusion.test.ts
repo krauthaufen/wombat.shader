@@ -684,3 +684,65 @@ describe("compileShaderSource end-to-end with imperative early-return", () => {
     expect(matches).toHaveLength(2);
   });
 });
+
+describe("per-stage emit: tree-shake helpers by entry-reachability", () => {
+  // Regression for the cross-stage helper leak. With v+v fusion the
+  // composed Module contains 2 VS-only `merged_state_helper` Function
+  // ValueDefs plus an FS Entry. Without per-stage tree-shaking the FS
+  // WGSL emitted those VS helpers verbatim — they reference VS-side
+  // `ReadInput("Input", …)` slots / VS-only globals that don't exist
+  // in the FS module (`unresolved value` at WGSL parse time).
+  it("FS WGSL does not contain VS helper bodies after v+v fusion + a FS entry", () => {
+    const source = `
+      function vsModel(input: { ObjPos: V3f }): { WorldPos: V3f } {
+        return { WorldPos: new V3f(input.ObjPos.x + 1.0, input.ObjPos.y, input.ObjPos.z) };
+      }
+      function vsClip(input: { WorldPos: V3f }): { Positions: V4f; v_color: V4f } {
+        return {
+          Positions: new V4f(input.WorldPos.x, input.WorldPos.y, input.WorldPos.z, 1.0),
+          v_color: new V4f(1.0, 0.5, 0.25, 1.0),
+        };
+      }
+      function fsMain(input: { v_color: V4f }): { outColor: V4f } {
+        return { outColor: input.v_color };
+      }
+    `;
+    const r = compileShaderSource(source, [
+      {
+        name: "vsModel", stage: "vertex",
+        inputs: [{ name: "ObjPos", type: Tvec3f, semantic: "ObjPos",
+                   decorations: [{ kind: "Location", value: 0 }] }],
+        outputs: [{ name: "WorldPos", type: Tvec3f, semantic: "WorldPos",
+                    decorations: [{ kind: "Location", value: 0 }] }],
+      },
+      {
+        name: "vsClip", stage: "vertex",
+        inputs: [{ name: "WorldPos", type: Tvec3f, semantic: "WorldPos",
+                   decorations: [{ kind: "Location", value: 0 }] }],
+        outputs: [
+          { name: "Positions", type: Tvec4f, semantic: "Positions",
+            decorations: [{ kind: "Builtin", value: "position" }] },
+          { name: "v_color", type: Tvec4f, semantic: "Color",
+            decorations: [{ kind: "Location", value: 0 }] },
+        ],
+      },
+      {
+        name: "fsMain", stage: "fragment",
+        inputs: [{ name: "v_color", type: Tvec4f, semantic: "Color",
+                   decorations: [{ kind: "Location", value: 0 }] }],
+        outputs: [{ name: "outColor", type: Tvec4f, semantic: "Color",
+                    decorations: [{ kind: "Location", value: 0 }] }],
+      },
+    ], { target: "wgsl" });
+    const vs = r.stages.find((s) => s.stage === "vertex")!.source;
+    const fs = r.stages.find((s) => s.stage === "fragment")!.source;
+    // VS module contains the fused helper functions.
+    expect(vs).toMatch(/fn _.*vsModel/);
+    // FS module DOES NOT contain the VS helpers — those are not
+    // reachable from `fsMain`.
+    expect(fs).not.toMatch(/fn _.*vsModel/);
+    expect(fs).not.toMatch(/fn _.*vsClip/);
+    // FS module also does not contain the VS Entry.
+    expect(fs).not.toMatch(/@vertex/);
+  });
+});
