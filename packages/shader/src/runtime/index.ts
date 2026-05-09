@@ -33,6 +33,8 @@ export { instanceEffect } from "./instanceEffect.js";
 export type {
   Stage, Effect, ComputeShader,
   HoleGetter, HoleGetters,
+  StageSubstitution, EffectSubstitution,
+  StageRename, EffectRename,
 } from "./stage.js";
 
 // Per-output dependency analysis — used by downstream layers

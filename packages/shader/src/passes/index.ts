@@ -68,4 +68,18 @@ export {
   substituteInputs,
   substituteUniforms,
   substituteAttributes,
+  substituteInputsInStage,
 } from "./substitute.js";
+
+export {
+  renameInputs,
+  renameInputsInStage,
+  renameOutputs,
+  renameOutputsInStage,
+  renameVaryings,
+  renameVars,
+  renameTypes,
+  renameEntries,
+  renameFunctions,
+} from "./rename.js";
+export type { RenameMapping } from "./rename.js";

@@ -35,5 +35,11 @@ export function instanceEffect(
         instanceAttributes: attrNames,
       });
     },
+    substitute(spec) {
+      return instanceEffect(inner.substitute(spec), attrNames);
+    },
+    rename(spec) {
+      return instanceEffect(inner.rename(spec), attrNames);
+    },
   };
 }

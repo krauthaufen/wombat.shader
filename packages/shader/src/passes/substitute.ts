@@ -1,6 +1,6 @@
 // Variable / input substitution. Used by inlining and constant propagation.
 
-import type { Expr, InputScope, LExpr, Module, Stmt, Var } from "../ir/index.js";
+import type { Expr, InputScope, LExpr, Module, Stage, Stmt, Var } from "../ir/index.js";
 import { mapExpr, mapStmt } from "./transform.js";
 
 /** Replace every read of `oldVar` with `newExpr`. Writes (LVar) are untouched. */
@@ -127,4 +127,40 @@ export function substituteAttributes(
 ): Module {
   const fn = typeof mapping === "function" ? mapping : (n: string) => mapping.get(n);
   return substituteInputs(m, "Input", fn);
+}
+
+/**
+ * Stage-restricted variant of `substituteInputs`. Only Entry bodies whose
+ * `stage` matches `stage` are walked; `Function` bodies (helpers) are
+ * walked unconditionally because they can be called from any stage —
+ * a helper that reads a uniform should still get rewritten.
+ *
+ * Use when a transform applies only to (say) the vertex side of a v+f
+ * effect: `substituteInputsInStage(m, "vertex", "Uniform", n => …)`
+ * leaves the fragment entry intact.
+ */
+export function substituteInputsInStage(
+  m: Module,
+  stage: Stage,
+  scope: InputScope,
+  mapping: (name: string) => Expr | undefined,
+): Module {
+  const exprFn = (e: Expr): Expr => {
+    if (e.kind === "ReadInput" && e.scope === scope) {
+      const r = mapping(e.name);
+      if (r !== undefined) return r;
+    }
+    return e;
+  };
+  const stmtMap = (s: Stmt): Stmt => mapStmt(s, { expr: exprFn });
+
+  const values = m.values.map((v): typeof v => {
+    if (v.kind === "Function") return { ...v, body: stmtMap(v.body) };
+    if (v.kind === "Entry") {
+      if (v.entry.stage !== stage) return v;
+      return { ...v, entry: { ...v.entry, body: stmtMap(v.entry.body) } };
+    }
+    return v;
+  });
+  return { ...m, values };
 }

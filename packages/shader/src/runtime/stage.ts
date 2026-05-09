@@ -24,10 +24,25 @@ import {
   hashModule,
   hashValue,
   prettyPrint,
+  type Expr,
   type Module,
+  type Stage as IRStage,
+  type Type,
   type ValueDef,
 } from "../ir/index.js";
-import { relinkVars, resolveHoles, type HoleValue } from "../passes/index.js";
+import {
+  relinkVars,
+  renameEntries,
+  renameFunctions,
+  renameInputsInStage,
+  renameOutputsInStage,
+  renameTypes,
+  renameVaryings,
+  resolveHoles,
+  substituteInputsInStage,
+  type HoleValue,
+  type RenameMapping,
+} from "../passes/index.js";
 import {
   compileModule,
   type CompileOptions,
@@ -69,6 +84,61 @@ export interface Stage {
   readonly id: string;
 }
 
+// ─── IR-rewrite spec types ──────────────────────────────────────────────
+//
+// Used by `Effect.substitute` / `Effect.rename`. Each per-stage spec
+// names which scope (input/uniform/builtin/output) to rewrite plus
+// the actual mapping. `EffectRename` additionally has module-wide
+// keys (types/entries/functions) which apply across every stage.
+
+type ExprMappingSource =
+  | ReadonlyMap<string, Expr>
+  | ((name: string) => Expr | undefined);
+
+export interface StageSubstitution {
+  readonly inputs?:   ExprMappingSource;
+  readonly uniforms?: ExprMappingSource;
+  readonly builtins?: ExprMappingSource;
+}
+
+export interface EffectSubstitution {
+  readonly vertex?:   StageSubstitution;
+  readonly fragment?: StageSubstitution;
+  readonly compute?:  StageSubstitution;
+}
+
+export interface StageRename {
+  readonly inputs?:   RenameMapping<string, Type>;
+  readonly outputs?:  RenameMapping<string, Type>;
+  readonly uniforms?: RenameMapping<string, Type>;
+  readonly builtins?: RenameMapping<string, Type>;
+  readonly types?:    ReadonlyMap<string, string>;
+  readonly entries?:  ReadonlyMap<string, string>;
+}
+
+export interface EffectRename {
+  readonly vertex?:   StageRename;
+  readonly fragment?: StageRename;
+  readonly compute?:  StageRename;
+  /** Applied across every stage's template. */
+  readonly types?:     ReadonlyMap<string, string>;
+  readonly entries?:   ReadonlyMap<string, string>;
+  readonly functions?: ReadonlyMap<string, string>;
+  /**
+   * Cross-stage varyings — paired VS output + FS input rename. Applied
+   * BEFORE the per-stage `vertex.outputs` / `fragment.inputs` renames,
+   * so a per-stage entry can override the paired default for one side
+   * (rarely needed, but available). If any name in `varyings` also
+   * appears as a target in `vertex.outputs` or `fragment.inputs`, that's
+   * a configuration error and we throw.
+   *
+   * Accepts either a name-keyed Map or a `(name, type) => newName |
+   * undefined` function — useful when distinct stages of the same
+   * effect share varying names but need disambiguation by type.
+   */
+  readonly varyings?:  RenameMapping<string, Type>;
+}
+
 /**
  * User-facing object: a list of stages plus a render-time compile.
  *
@@ -93,6 +163,21 @@ export interface Effect {
    * is the pre-`compile` template).
    */
   dumpIR(): string;
+  /**
+   * Rewrite every `ReadInput(scope, name)` in the targeted stage's
+   * template Module via the supplied mapping(s). The Effect's `id`
+   * is recomputed from the rewritten templates, so the per-effect
+   * compile cache can't return a pre-rewrite result.
+   */
+  substitute(spec: EffectSubstitution): Effect;
+  /**
+   * Rename identifiers in each stage's template Module. Per-stage
+   * keys (`vertex` / `fragment` / `compute`) map to a `StageRename`
+   * that can rename inputs / outputs / uniforms / builtins / struct
+   * types / entries within that stage. Module-wide keys (`types` /
+   * `entries` / `functions`) apply across every stage's template.
+   */
+  rename(spec: EffectRename): Effect;
 }
 
 /**
@@ -131,6 +216,87 @@ export function effect(...effects: readonly Effect[]): Effect {
   for (const e of effects) allStages.push(...e.stages);
   const composedId = combineHashes(...effects.map((e) => e.id));
   return makeEffect(allStages, composedId);
+}
+
+// Build a Module-level rewriter that applies one StageSubstitution to
+// the given stage. Returns the (possibly identical) rewritten Module.
+function applyStageSubstitution(
+  template: Module,
+  stage: IRStage,
+  spec: StageSubstitution | undefined,
+): Module {
+  if (!spec) return template;
+  const toFn = (m: ExprMappingSource | undefined): ((n: string) => Expr | undefined) | undefined => {
+    if (!m) return undefined;
+    if (typeof m === "function") return m;
+    return (n: string) => m.get(n);
+  };
+  let out = template;
+  const ins = toFn(spec.inputs);
+  if (ins) out = substituteInputsInStage(out, stage, "Input", ins);
+  const uni = toFn(spec.uniforms);
+  if (uni) out = substituteInputsInStage(out, stage, "Uniform", uni);
+  const bi = toFn(spec.builtins);
+  if (bi) out = substituteInputsInStage(out, stage, "Builtin", bi);
+  return out;
+}
+
+/**
+ * Truthy if the supplied mapping has work to do — for Maps that means
+ * non-empty, for functions we always pass through (we can't know
+ * cheaply whether the function would return undefined for every name,
+ * so let the rename pass short-circuit if the materialised map ends
+ * up empty).
+ */
+function hasMappingWork<K, V>(m: RenameMapping<K, V> | undefined): boolean {
+  if (m === undefined) return false;
+  if (typeof m === "function") return true;
+  return m.size > 0;
+}
+
+function applyStageRename(
+  template: Module,
+  stage: IRStage,
+  spec: StageRename | undefined,
+): Module {
+  if (!spec) return template;
+  let out = template;
+  if (hasMappingWork(spec.inputs)) {
+    out = renameInputsInStage(out, stage, "Input", spec.inputs!);
+  }
+  if (hasMappingWork(spec.outputs)) {
+    out = renameOutputsInStage(out, stage, spec.outputs!);
+  }
+  if (hasMappingWork(spec.uniforms)) {
+    out = renameInputsInStage(out, stage, "Uniform", spec.uniforms!);
+  }
+  if (hasMappingWork(spec.builtins)) {
+    out = renameInputsInStage(out, stage, "Builtin", spec.builtins!);
+  }
+  if (spec.types && spec.types.size > 0) {
+    out = renameTypes(out, spec.types);
+  }
+  if (spec.entries && spec.entries.size > 0) {
+    out = renameEntries(out, spec.entries);
+  }
+  return out;
+}
+
+function inferStageOf(template: Module): IRStage | undefined {
+  // A wombat Stage holds one Entry (per `vertex(...)` / `fragment(...)`
+  // call). For Effect.substitute / Effect.rename we need the stage tag
+  // to route the rewrite. If the template has no Entry (theoretical),
+  // we conservatively return undefined and skip per-stage routing.
+  for (const v of template.values) {
+    if (v.kind === "Entry") return v.entry.stage;
+  }
+  return undefined;
+}
+
+function rebuildStage(s: Stage, newTemplate: Module): Stage {
+  if (newTemplate === s.template) return s;
+  const linked = relinkVars(newTemplate);
+  return { template: linked, holes: s.holes, avalHoles: s.avalHoles, id: hashModule(linked) };
 }
 
 function makeEffect(stages: readonly Stage[], id: string): Effect {
@@ -181,6 +347,73 @@ function makeEffect(stages: readonly Stage[], id: string): Effect {
       const compiled: CompiledEffect = { ...baseCompiled, avalBindings };
       cache.set(cacheKey, compiled);
       return compiled;
+    },
+    substitute(spec: EffectSubstitution): Effect {
+      const newStages = stages.map((s) => {
+        const stageTag = inferStageOf(s.template);
+        if (stageTag === undefined) return s;
+        const perStage = spec[stageTag];
+        const next = applyStageSubstitution(s.template, stageTag, perStage);
+        return rebuildStage(s, next);
+      });
+      const newId = combineHashes(...newStages.map((s) => s.id));
+      return makeEffect(newStages, newId);
+    },
+    rename(spec: EffectRename): Effect {
+      // Validate `varyings` against per-stage outputs/inputs ahead of
+      // time. If both maps touch the same name (as source or target on
+      // the relevant axis) the user almost certainly has a bug — apply
+      // order would cause one to silently win or collide downstream;
+      // throwing here puts the diagnostic right at the call site.
+      //
+      // The overlap check is purely structural and only runs when both
+      // mappings are concrete Maps. With function-form mappings the
+      // domain is effectively the IR's universe, so a true overlap
+      // surfaces as a downstream collision-policy throw from the
+      // underlying rename pass — sufficient diagnostic.
+      if (spec.varyings && typeof spec.varyings !== "function" && spec.varyings.size > 0) {
+        const varyingsMap = spec.varyings;
+        const checkOverlap = (
+          stageMap: RenameMapping<string, Type> | undefined,
+          axis: "vertex.outputs" | "fragment.inputs",
+        ): void => {
+          if (!stageMap || typeof stageMap === "function" || stageMap.size === 0) return;
+          const vSrc = new Set(varyingsMap.keys());
+          const vDst = new Set(varyingsMap.values());
+          for (const [from, to] of stageMap) {
+            if (vSrc.has(from) || vDst.has(from) || vSrc.has(to) || vDst.has(to)) {
+              throw new Error(
+                `Effect.rename: varyings rename + ${axis} overlap on name "${
+                  vSrc.has(from) || vDst.has(from) ? from : to
+                }"`,
+              );
+            }
+          }
+        };
+        checkOverlap(spec.vertex?.outputs, "vertex.outputs");
+        checkOverlap(spec.fragment?.inputs, "fragment.inputs");
+      }
+
+      const newStages = stages.map((s) => {
+        const stageTag = inferStageOf(s.template);
+        let next = s.template;
+        // Paired varyings first — a per-stage override (if any) can then
+        // run on the already-renamed name. The collision check above
+        // ensures the per-stage map doesn't touch a name varyings just
+        // produced or consumed, so this order is safe.
+        if (hasMappingWork(spec.varyings)) {
+          next = renameVaryings(next, spec.varyings!);
+        }
+        if (stageTag !== undefined) {
+          next = applyStageRename(next, stageTag, spec[stageTag]);
+        }
+        if (spec.types && spec.types.size > 0) next = renameTypes(next, spec.types);
+        if (spec.entries && spec.entries.size > 0) next = renameEntries(next, spec.entries);
+        if (spec.functions && spec.functions.size > 0) next = renameFunctions(next, spec.functions);
+        return rebuildStage(s, next);
+      });
+      const newId = combineHashes(...newStages.map((s) => s.id));
+      return makeEffect(newStages, newId);
     },
   };
 }
