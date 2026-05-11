@@ -200,9 +200,25 @@ function hashIfPure(e: Expr): string | undefined {
  * iff they have the same shape, the same literal values, and the same
  * Var identities (we use Var reference equality for vars, encoded via
  * a per-walk table; passes call `hash` from one root so consistent).
+ *
+ * Memoised by Expr identity within a single CSE pass. Without this,
+ * each call recursively `canonical()`-walks the entire subtree and
+ * JSON.stringifies it — every binary-op commutative sort then
+ * re-stringifies the children — giving an O(N²) per-pass cost on a
+ * deep IR. With memoisation we revisit each Expr once: a few-hundred-
+ * node fragment-shader compile drops from seconds to milliseconds.
+ *
+ * The cache is keyed on Expr OBJECT identity. CSE never mutates Expr
+ * nodes in place (every pass returns fresh trees), so a stale entry is
+ * impossible within the pass.
  */
+const hashCache: WeakMap<Expr, string> = new WeakMap();
 function hash(e: Expr): string {
-  return JSON.stringify(canonical(e));
+  const cached = hashCache.get(e);
+  if (cached !== undefined) return cached;
+  const h = JSON.stringify(canonical(e));
+  hashCache.set(e, h);
+  return h;
 }
 
 function canonical(e: Expr): unknown {
