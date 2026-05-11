@@ -514,9 +514,25 @@ function rewriteStateType(v: ValueDef, name: string, newType: Type): ValueDef {
 
 function rewriteVarTypesInStmt(s: Stmt, name: string, newType: Type): Stmt {
   const rewriteT = (t: Type): Type => (t.kind === "Struct" && t.name === name ? newType : t);
+  // Preserve Var IDENTITY when narrowing State-typed Vars: every Expr /
+  // LExpr / Declare visit of a Var v that needs its `.type` updated
+  // must produce the SAME new Var instance, otherwise downstream
+  // identity-keyed analyses (DCE's `used.has(child.var)`,
+  // `inlinePass.subst: Map<Var, Expr>`) miss the connection between
+  // the wrapper-body Declare and the body's reads of that same Var,
+  // and drop the Declare entirely.
+  const varCache = new Map<Var, Var>();
+  const narrowVar = (v: Var): Var => {
+    if (v.type.kind !== "Struct" || v.type.name !== name) return v;
+    const cached = varCache.get(v);
+    if (cached !== undefined) return cached;
+    const fresh: Var = { ...v, type: newType };
+    varCache.set(v, fresh);
+    return fresh;
+  };
   const exprFn = (e: Expr): Expr => {
     if (e.kind === "Var" && e.var.type.kind === "Struct" && e.var.type.name === name) {
-      return { ...e, var: { ...e.var, type: newType }, type: newType };
+      return { ...e, var: narrowVar(e.var), type: newType };
     }
     if (e.kind === "Field" && e.type.kind === "Struct" && e.type.name === name) {
       return { ...e, type: newType };
@@ -529,14 +545,14 @@ function rewriteVarTypesInStmt(s: Stmt, name: string, newType: Type): Stmt {
   return mapStmt(s, {
     stmt: (st) => {
       if (st.kind === "Declare" && st.var.type.kind === "Struct" && st.var.type.name === name) {
-        return { ...st, var: { ...st.var, type: newType } };
+        return { ...st, var: narrowVar(st.var) };
       }
       return st;
     },
     expr: exprFn,
     lexpr: (l) => {
       if (l.kind === "LVar" && l.var.type.kind === "Struct" && l.var.type.name === name) {
-        return { ...l, var: { ...l.var, type: newType }, type: newType };
+        return { ...l, var: narrowVar(l.var), type: newType };
       }
       return l;
     },

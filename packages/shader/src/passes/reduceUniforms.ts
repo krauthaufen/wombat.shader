@@ -98,7 +98,18 @@ function collectReferencedNames(module: Module): Set<string> {
   const names = new Set<string>();
 
   const onExpr = (e: Expr): void => {
-    if (e.kind === "ReadInput") names.add(e.name);
+    // Module-level Uniform / Sampler / StorageBuffer decls are only
+    // referenced through scopes that mean "external binding by name"
+    // — Uniform, Output, Builtin, Closure. An `Input`-scoped read
+    // names a per-stage `EntryParameter` (vertex attribute / inter-
+    // stage varying / former-uniform surfaced by `uniformsToInputs`),
+    // never a module-level binding. Counting it would keep dead
+    // Uniform decls alive when an upstream pass (instanceUniforms,
+    // uniformsToInputs) rewrote a `ReadInput("Uniform", X)` to
+    // `ReadInput("Input", X)`: the rewritten read still has
+    // `name === X`, but the Uniform decl for X is now unreferenced
+    // and should be dropped.
+    if (e.kind === "ReadInput" && e.scope !== "Input") names.add(e.name);
     if (e.kind === "Var") names.add(e.var.name);
     visitExprChildren(e, onExpr);
   };
@@ -106,7 +117,7 @@ function collectReferencedNames(module: Module): Set<string> {
     // LVar names also reference module-level decls (storage buffers
     // accessed as `name[i] = ...`).
     if (l.kind === "LVar") names.add(l.var.name);
-    if (l.kind === "LInput") names.add(l.name);
+    if (l.kind === "LInput" && l.scope !== "Input") names.add(l.name);
     visitLExprChildren(l, onLExpr, onExpr);
   };
 
