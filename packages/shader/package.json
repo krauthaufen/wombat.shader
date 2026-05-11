@@ -1,7 +1,7 @@
 {
   "name": "@aardworx/wombat.shader",
-  "version": "0.5.2",
-  "description": "wombat.shader: TypeScript shader source \u2192 WGSL/GLSL with optimisation passes, named-binding ProgramInterface, and runtime Effect/ComputeShader composition.",
+  "version": "0.5.3",
+  "description": "wombat.shader: TypeScript shader source → WGSL/GLSL with optimisation passes, named-binding ProgramInterface, and runtime Effect/ComputeShader composition.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
