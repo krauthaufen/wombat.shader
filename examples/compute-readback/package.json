@@ -10,8 +10,8 @@
     "postinstall": "patch-package"
   },
   "dependencies": {
-    "@aardworx/wombat.shader": "*",
-    "@aardworx/wombat.shader-vite": "*",
+    "@aardworx/wombat.shader": "^0.5.3",
+    "@aardworx/wombat.shader-vite": "^0.3.1",
     "boperators": "^0.3.2"
   },
   "devDependencies": {
