@@ -176,10 +176,25 @@ export function buildInterface(input: BuildInterfaceInput): ProgramInterface {
   // blocks / samplers / textures / storage buffers, mirroring the WGSL
   // emitter's centralised assignment so the runtime BindGroupLayout
   // matches what `var<...>` declarations the shader actually has.
+  // Pre-collect pinned slots from `keep: true` StorageBuffers so
+  // auto-assignment skips them.
+  const pinnedSlots = new Set<number>();
+  for (const v of input.module.values) {
+    if (v.kind === "StorageBuffer" && v.keep === true) pinnedSlots.add(v.binding.slot);
+  }
   const slot = { next: 0 };
-  const { uniforms, uniformBlocks } = collectUniforms(input.module, layoutTarget, slot);
-  const { samplers, textures } = collectSamplersAndTextures(input.module, slot);
-  const storageBuffers = collectStorageBuffers(input.module, input.target, slot);
+  // Wrapped via a getter that skips pinned slots whenever
+  // `.next` is consumed. Each collector reads `slot.next` and then
+  // increments — the skip happens at read time so each new
+  // assignment lands on the next non-pinned slot.
+  const skip = (): void => { while (pinnedSlots.has(slot.next)) slot.next++; };
+  const sc: { get next(): number; set next(v: number) } = {
+    get next(): number { skip(); return slot.next; },
+    set next(v: number) { slot.next = v; },
+  };
+  const { uniforms, uniformBlocks } = collectUniforms(input.module, layoutTarget, sc);
+  const { samplers, textures } = collectSamplersAndTextures(input.module, sc);
+  const storageBuffers = collectStorageBuffers(input.module, input.target, sc, pinnedSlots);
 
   return {
     target: input.target,
@@ -398,17 +413,25 @@ function collectStorageBuffers(
   module: Module,
   target: Target,
   slotCounter: { next: number },
+  pinnedSlots: ReadonlySet<number>,
 ): StorageBufferInfo[] {
   const out: StorageBufferInfo[] = [];
   const layoutTarget: LayoutTarget = target === "glsl" ? "glsl-std140" : "wgsl-storage";
+  const nextSlot = (): number => {
+    while (pinnedSlots.has(slotCounter.next)) slotCounter.next++;
+    return slotCounter.next++;
+  };
   for (const v of module.values) {
     if (v.kind !== "StorageBuffer") continue;
     const layout = computeLayout(v.layout, layoutTarget);
     const fields = (layout.fields ?? []).map((f) => fieldToInfo(f));
+    // `keep: true` honours the binding.slot verbatim (matches the
+    // wgsl emit). Otherwise auto-assign off the shared counter.
+    const slot = v.keep === true ? v.binding.slot : nextSlot();
     out.push({
       name: v.name,
-      group: 0,
-      slot: slotCounter.next++,
+      group: v.binding.group,
+      slot,
       access: v.access,
       size: layout.size,
       fields,

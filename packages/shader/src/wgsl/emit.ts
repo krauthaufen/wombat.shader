@@ -172,20 +172,34 @@ export function emitWgsl(module: Module, entryName?: string): EmitResult {
   // order with the same counter so the runtime's BindGroupLayout
   // entries match the WGSL `@binding(...)` indices exactly.
   // Upstream `binding.group` / `binding.slot` annotations are ignored.
-  const slotCounter = { next: 0 };
+  // Pre-pass: collect pinned slots from StorageBuffers tagged with
+  // `keep: true` — host-required bindings whose slot the WGSL must
+  // match exactly. Auto-assigned Uniforms / Samplers skip them.
+  const pinnedSlots = new Set<number>();
   for (const v of module.values) {
-    if (v.kind === "Uniform") emitUniformGroup(ctx, v.uniforms, 0, slotCounter);
+    if (v.kind === "StorageBuffer" && v.keep === true) pinnedSlots.add(v.binding.slot);
+  }
+  const slotCounter = { next: 0 };
+  const nextAutoSlot = (): number => {
+    while (pinnedSlots.has(slotCounter.next)) slotCounter.next++;
+    return slotCounter.next++;
+  };
+  for (const v of module.values) {
+    if (v.kind === "Uniform") emitUniformGroup(ctx, v.uniforms, 0, slotCounter, nextAutoSlot);
   }
   for (const v of module.values) {
     if (v.kind === "Sampler") {
-      const slot = slotCounter.next++;
+      const slot = nextAutoSlot();
       emitSampler(ctx, v.name, 0, slot, v.type);
     }
   }
   for (const v of module.values) {
     if (v.kind === "StorageBuffer") {
-      const slot = slotCounter.next++;
-      emitStorageBuffer(ctx, v.name, 0, slot, v.layout, v.access);
+      // Pinned (`keep: true`) → use `binding.slot` verbatim; the
+      // host already wired the BGL to expect that slot. Otherwise
+      // auto-assign off the shared counter (skipping pinned slots).
+      const slot = v.keep === true ? v.binding.slot : nextAutoSlot();
+      emitStorageBuffer(ctx, v.name, v.binding.group, slot, v.layout, v.access);
     }
   }
 
@@ -400,6 +414,7 @@ function emitUniformGroup(
   uniforms: readonly UniformDecl[],
   autoGroup: number,
   slotCounter: { next: number },
+  nextAutoSlot?: () => number,
 ): void {
   // Group by buffer name (default = each uniform its own var<uniform>).
   const buckets = new Map<string | undefined, UniformDecl[]>();
@@ -413,7 +428,10 @@ function emitUniformGroup(
   // annotations on UniformDecls are ignored; otherwise two effects
   // can each pin (0, 0) independently and the runtime BindGroupLayout
   // ends up with duplicate entries. The slot counter is threaded by
-  // the caller so multiple Uniform ValueDefs share one numbering.
+  // the caller so multiple Uniform ValueDefs share one numbering;
+  // when `nextAutoSlot` is provided, it skips StorageBuffer-pinned
+  // slots so the bindings don't collide.
+  const nextSlot = nextAutoSlot ?? ((): number => slotCounter.next++);
   for (const [buffer, group] of buckets) {
     if (buffer) {
       const structName = `_UB_${buffer}`;
@@ -423,7 +441,7 @@ function emitUniformGroup(
       ctx.out.dec();
       ctx.out.line("};");
       const grp = autoGroup;
-      const slot = slotCounter.next++;
+      const slot = nextSlot();
       ctx.out.line(`@group(${grp}) @binding(${slot}) var<uniform> ${safeName(buffer)}: ${structName};`);
       for (const u of group) {
         ctx.bindings.uniforms.push({ name: `${buffer}.${u.name}`, group: grp, slot, type: u.type });
@@ -431,7 +449,7 @@ function emitUniformGroup(
     } else {
       for (const u of group) {
         const grp = autoGroup;
-        const slot = slotCounter.next++;
+        const slot = nextSlot();
         ctx.out.line(`@group(${grp}) @binding(${slot}) var<uniform> ${safeName(u.name)}: ${typeStr(u.type)};`);
         ctx.bindings.uniforms.push({ name: u.name, group: grp, slot, type: u.type });
       }

@@ -419,6 +419,19 @@ export type ValueDef =
       readonly name: string;
       readonly layout: Type;
       readonly access: "read" | "read_write";
+      /**
+       * Opt-in marker for "stable binding": `keep: true` means the
+       * host-side BindGroupLayout has committed to this slot, so:
+       *   - The wgsl emitter MUST emit the buffer at `binding.slot`
+       *     (no auto-assignment), and auto-assigned uniforms /
+       *     samplers in the same group must skip this slot.
+       *   - `reduceUniforms` must NOT drop this buffer even if no
+       *     code path references it (the BGL still expects an entry).
+       * Plain unmarked StorageBuffers keep the original semantics:
+       * the emitter auto-assigns a slot off the shared counter and
+       * `reduceUniforms` drops them when no body reference survives.
+       */
+      readonly keep?: boolean;
     }
   | {
       readonly kind: "Sampler";

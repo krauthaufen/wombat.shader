@@ -46,6 +46,15 @@ export function reduceUniforms(module: Module): Module {
       continue;
     }
     if (v.kind === "Sampler" || v.kind === "StorageBuffer") {
+      // StorageBuffers with `keep: true` are declared by the host as
+      // mandatory bindings — keep them whether or not a code path on
+      // this compile references them (the BGL already commits to the
+      // slot; dropping the buffer would shift slot numbering or leave
+      // the BGL with no matching shader entry).
+      if (v.kind === "StorageBuffer" && v.keep === true) {
+        filtered.push(v);
+        continue;
+      }
       if (names.has(v.name)) filtered.push(v);
       continue;
     }
