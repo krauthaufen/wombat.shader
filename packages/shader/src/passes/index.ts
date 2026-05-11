@@ -71,6 +71,8 @@ export {
   substituteInputsInStage,
 } from "./substitute.js";
 
+export { uniformsToInputs } from "./uniformsToInputs.js";
+
 export {
   renameInputs,
   renameInputsInStage,
