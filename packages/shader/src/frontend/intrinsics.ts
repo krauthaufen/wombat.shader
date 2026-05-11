@@ -93,7 +93,7 @@ export const INTRINSICS: Record<string, IntrinsicRef> = {
   asin: makePure("asin", scalarOnly),
   acos: makePure("acos", scalarOnly),
   atan: makePure("atan", scalarOnly),
-  atan2: makePure("atan", scalarOnly),
+  atan2: makePure("atan2", scalarOnly),
   sinh: makePure("sinh", elementWise),
   cosh: makePure("cosh", elementWise),
   tanh: makePure("tanh", elementWise),
