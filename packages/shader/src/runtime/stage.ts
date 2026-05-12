@@ -299,13 +299,38 @@ function rebuildStage(s: Stage, newTemplate: Module): Stage {
   return { template: linked, holes: s.holes, avalHoles: s.avalHoles, id: hashModule(linked) };
 }
 
+// Module-level compile cache shared across all Effect instances.
+//
+// Why module-level rather than per-instance: every Effect transform in
+// this codebase derives its result's `id` deterministically from its
+// inputs (e.g. `instanceEffect(inner, attrs)` → `combineHashes(inner.id,
+// "INST", ...attrs)`; `effect(...)` → `combineHashes(...stage ids)`).
+// Two semantically-equivalent transforms applied through different
+// wrapper objects produce different *object identity* but the same
+// `id`. With a per-instance cache, each fresh wrapper had its own empty
+// cache and the first `compile()` call from a fresh wrapper redid the
+// full IR pipeline (`compileModule` + all passes) — even though an
+// identical compile had already run somewhere else. In the heap-demo-sg
+// toggle, this drove 142 `compileModule` invocations per add-half-back
+// click (one per textured RO instance). A module-level Map keyed on the
+// cache string (`id + sampled-holes hash + target + layoutKey`)
+// collapses that to one miss ever per logical effect+options.
+//
+// Sharing is safe: a fresh `stage(...)` call's `holes` / `avalHoles`
+// closures are constructed once per template at JS module-eval time,
+// then reused across every `makeEffect` that includes that stage —
+// so two Effects with the same id reference the same stage objects
+// and therefore the same avalHoles handles. Returning the cached
+// `CompiledEffect` (which has the captured `avalBindings`) is the
+// correct shared result.
+//
+// Caveat: anyone constructing an Effect with a non-deterministic id
+// (random / identity-based) breaks the sharing contract. All current
+// id-producing sites use `combineHashes` over input ids + transform
+// parameters and are therefore safe.
+const moduleCompileCache: Map<string, CompiledEffect> = new Map();
+
 function makeEffect(stages: readonly Stage[], id: string): Effect {
-  // Per-effect cache: key = effect.id + resolved-hole-values hash +
-  // target. Closure values are sampled fresh each compile, so two
-  // compile() calls with the same captured values hit the cache;
-  // the moment any captured value changes the key changes too and
-  // a fresh emit is performed.
-  const cache = new Map<string, CompiledEffect>();
   return {
     stages, id,
     dumpIR() {
@@ -323,7 +348,7 @@ function makeEffect(stages: readonly Stage[], id: string): Effect {
       const cacheKey = `${id}:${hashValue(sampledPerStage)}:${options.target}` +
         (options.skipOptimisations ? ":raw" : "") +
         layoutKey(options.fragmentOutputLayout);
-      const cached = cache.get(cacheKey);
+      const cached = moduleCompileCache.get(cacheKey);
       if (cached) return cached;
 
       const allValues: ValueDef[] = [];
@@ -345,7 +370,7 @@ function makeEffect(stages: readonly Stage[], id: string): Effect {
         }
       }
       const compiled: CompiledEffect = { ...baseCompiled, avalBindings };
-      cache.set(cacheKey, compiled);
+      moduleCompileCache.set(cacheKey, compiled);
       return compiled;
     },
     substitute(spec: EffectSubstitution): Effect {

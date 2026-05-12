@@ -59,7 +59,18 @@ export interface OutputDep {
  * outputs but compute stages don't participate in cross-stage
  * resolve — their input reads are reported as-is.
  */
+const effectDepsCache: WeakMap<Effect, ReadonlyMap<string, OutputDep>> =
+  new WeakMap();
+
 export function effectDependencies(effect: Effect): ReadonlyMap<string, OutputDep> {
+  const cached = effectDepsCache.get(effect);
+  if (cached !== undefined) return cached;
+  const result = effectDependenciesUncached(effect);
+  effectDepsCache.set(effect, result);
+  return result;
+}
+
+function effectDependenciesUncached(effect: Effect): ReadonlyMap<string, OutputDep> {
   // 1. Per-stage, per-entry: output → set<inputName, Type>.
   //    `Effect` carries one `Stage` per `vertex/fragment/compute`
   //    template. We index by stage kind to apply the v→f resolve
