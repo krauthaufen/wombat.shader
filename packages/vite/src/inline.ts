@@ -121,8 +121,11 @@ export function transformInlineShaders(
   // optional `<…>` group is for the type-parametrised form
   // `vertex<I, O>(arrow)` which TS doesn't strip until compilation;
   // without it the plugin would skip generic-typed marker calls.
-  if (!/\b(vertex|fragment|compute)\s*(?:<[^()]*>)?\s*\(/.test(source)) return null;
-  if (!sourceImportsRuntime(source)) return null;
+  // `derivedUniform(arrow)` (wombat.rendering) is recognised too — we don't
+  // replace the call, we append a leaf-type-hint map read from the file's
+  // `UniformScope` augmentation so `u.<Name>` reads its real WGSL type.
+  if (!/\b(vertex|fragment|compute|derivedUniform)\s*(?:<[^()]*>)?\s*\(/.test(source)) return null;
+  if (!/from\s+["']@aardworx\/wombat\.(shader|rendering)\b/.test(source)) return null;
 
   // Update the resolver's in-memory copy so the type checker sees the
   // same source the plugin is walking. Then prefer its source file
@@ -137,8 +140,16 @@ export function transformInlineShaders(
     sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.ES2022, true);
   }
   const moduleConsts = collectModuleConsts(sf);
+  // Leaf-type hints for `derivedUniform(...)` markers: uniform name → WGSL leaf kind,
+  // gathered from this file's `declare module "@aardworx/wombat.shader/uniforms" {
+  // interface UniformScope { … } }` blocks. (Names declared elsewhere — e.g. the standard
+  // `ModelTrafo`/`ViewTrafo`/`ProjTrafo` auto-uniforms — aren't here; that's fine, the
+  // runtime defaults `u.<Name>` to mat4, which is right for trafos.)
+  const uniformAugments = collectUniformAugments(sf);
 
   const replacements: Array<{ start: number; end: number; text: string; marker: MarkerName }> = [];
+  // `derivedUniform(...)` augmentations: text to insert (the leaf-type-hint arg) at a position.
+  const derivedAugments: Array<{ at: number; text: string }> = [];
 
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)
@@ -156,11 +167,37 @@ export function transformInlineShaders(
       // Don't descend — the body is consumed by the frontend.
       return;
     }
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)
+        && node.expression.text === "derivedUniform" && node.arguments.length === 1) {
+      const arrow = node.arguments[0];
+      if (arrow && ts.isArrowFunction(arrow) && arrow.parameters.length === 1) {
+        const param = arrow.parameters[0]!;
+        if (ts.isIdentifier(param.name)) {
+          const uName = param.name.text;
+          const hints: Record<string, string> = {};
+          const collectLeaf = (n: ts.Node): void => {
+            if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression)
+                && n.expression.text === uName && ts.isIdentifier(n.name)) {
+              const kind = uniformAugments.get(n.name.text);
+              if (kind === "RESOURCE") {
+                throw error(sf, n, `wombat.shader: derived-uniform rules can't reference resources — \`${uName}.${n.name.text}\` is a texture/sampler/storage binding; rules read uniforms only.`);
+              }
+              if (kind !== undefined) hints[n.name.text] = kind;
+            }
+            ts.forEachChild(n, collectLeaf);
+          };
+          collectLeaf(arrow.body);
+          if (Object.keys(hints).length > 0) {
+            derivedAugments.push({ at: arrow.getEnd(), text: `, ${JSON.stringify(hints)}` });
+          }
+        }
+      }
+    }
     ts.forEachChild(node, visit);
   }
   visit(sf);
 
-  if (replacements.length === 0) return null;
+  if (replacements.length === 0 && derivedAugments.length === 0) return null;
 
   // Apply replacements via magic-string so we get a v3 source map for
   // free. Each marker call's region is overwritten in place; the map
@@ -171,15 +208,21 @@ export function transformInlineShaders(
   for (const r of replacements) {
     ms.overwrite(r.start, r.end, r.text);
   }
-  // Auto-prepend the runtime imports for whichever markers actually
+  for (const a of derivedAugments) {
+    ms.appendLeft(a.at, a.text);
+  }
+  // Auto-prepend the runtime imports for whichever stage markers actually
   // appeared. Compute uses its own factory (`computeShader`) so it
   // returns a `ComputeShader`, distinct from the graphics-stage `Effect`.
+  // (derivedUniform needs no import — we only append an arg to the call.)
   const needStage = replacements.some(r => r.marker !== "compute");
   const needCompute = replacements.some(r => r.marker === "compute");
-  const imports: string[] = [];
-  if (needStage) imports.push("stage as __wombat_stage");
-  if (needCompute) imports.push("computeShader as __wombat_compute");
-  ms.prepend(`import { ${imports.join(", ")} } from "@aardworx/wombat.shader";\n`);
+  if (needStage || needCompute) {
+    const imports: string[] = [];
+    if (needStage) imports.push("stage as __wombat_stage");
+    if (needCompute) imports.push("computeShader as __wombat_compute");
+    ms.prepend(`import { ${imports.join(", ")} } from "@aardworx/wombat.shader";\n`);
+  }
 
   return {
     code: ms.toString(),
@@ -189,6 +232,47 @@ export function transformInlineShaders(
       hires: true,
     }) as unknown as object,
   };
+}
+
+/**
+ * Scan a source file for `declare module "@aardworx/wombat.shader/uniforms" {
+ * interface UniformScope { name: TypeRef; … } }` blocks and map each member name to a
+ * WGSL leaf kind ("f32"/"u32"/"i32"/"vec2"/"vec3"/"vec4"/"mat3"/"mat4"), or `"RESOURCE"`
+ * for sampler/texture/storage types, or skip if unrecognised. Drives the `derivedUniform`
+ * leaf-type hints.
+ */
+function collectUniformAugments(sf: ts.SourceFile): Map<string, string> {
+  const out = new Map<string, string>();
+  const typeNameToLeaf: Record<string, string> = {
+    f32: "f32", number: "f32", u32: "u32", i32: "i32",
+    V2f: "vec2", V3f: "vec3", V4f: "vec4",
+    M33f: "mat3", M44f: "mat4", M44d: "mat4", Trafo3d: "mat4",
+  };
+  const resourceNames = new Set([
+    "Sampler1D", "Sampler2D", "Sampler3D", "SamplerCube", "Sampler2DArray", "SamplerCubeArray",
+    "Sampler2DShadow", "SamplerCubeShadow", "Texture1D", "Texture2D", "Texture3D", "TextureCube",
+    "Texture2DArray", "Storage", "StorageTexture", "StorageBuffer",
+  ]);
+  const handleInterface = (decl: ts.InterfaceDeclaration): void => {
+    if (decl.name.text !== "UniformScope") return;
+    for (const m of decl.members) {
+      if (!ts.isPropertySignature(m) || !m.type || !ts.isIdentifier(m.name)) continue;
+      let typeName: string | undefined;
+      if (ts.isTypeReferenceNode(m.type) && ts.isIdentifier(m.type.typeName)) typeName = m.type.typeName.text;
+      else if (m.type.kind === ts.SyntaxKind.NumberKeyword) typeName = "number";
+      if (typeName === undefined) continue;
+      if (resourceNames.has(typeName)) out.set(m.name.text, "RESOURCE");
+      else if (typeNameToLeaf[typeName] !== undefined) out.set(m.name.text, typeNameToLeaf[typeName]!);
+    }
+  };
+  const walk = (n: ts.Node): void => {
+    if (ts.isModuleDeclaration(n) && ts.isStringLiteral(n.name) && n.name.text === "@aardworx/wombat.shader/uniforms" && n.body && ts.isModuleBlock(n.body)) {
+      for (const s of n.body.statements) if (ts.isInterfaceDeclaration(s)) handleInterface(s);
+    }
+    ts.forEachChild(n, walk);
+  };
+  walk(sf);
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────
