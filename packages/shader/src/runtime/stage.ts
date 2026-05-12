@@ -15,14 +15,18 @@
 //
 // Only constant holes are supported here. The IR template carries
 // `ReadInput("Closure", name, type)` placeholders; the values flow in
-// via the getters, so two compiles of the same Effect with different
-// captured values produce different specialised shaders (a deliberate
-// behavior — runtime uniform binding is a separate, later opt-in).
+// via the getters at compile time and get inlined as IR constants
+// (FShade specialization-by-capture). The compile cache is keyed on the
+// effect's `id` (content hash) + compile options only — NOT on the
+// sampled hole values — so the holes for a given `id` are assumed
+// invariant across compiles (true for module-level-const captures,
+// which is everything in practice). An effect that captures a value
+// varying per construction for a fixed `id` would get a stale cached
+// shader; pass such a value as a uniform instead.
 
 import {
   combineHashes,
   hashModule,
-  hashValue,
   prettyPrint,
   type Expr,
   type Module,
@@ -312,9 +316,10 @@ function rebuildStage(s: Stage, newTemplate: Module): Stage {
 // full IR pipeline (`compileModule` + all passes) — even though an
 // identical compile had already run somewhere else. In the heap-demo-sg
 // toggle, this drove 142 `compileModule` invocations per add-half-back
-// click (one per textured RO instance). A module-level Map keyed on the
-// cache string (`id + sampled-holes hash + target + layoutKey`)
-// collapses that to one miss ever per logical effect+options.
+// click (one per textured RO instance). A module-level Map keyed on
+// `id + target + skipOpt + layoutKey` collapses that to one miss ever
+// per logical effect+options — and that key is cheap to build, so the
+// hit path (the 20k-render-objects common case) is just a Map lookup.
 //
 // Sharing is safe: a fresh `stage(...)` call's `holes` / `avalHoles`
 // closures are constructed once per template at JS module-eval time,
@@ -337,6 +342,37 @@ function makeEffect(stages: readonly Stage[], id: string): Effect {
       return stages.map((s, i) => `// stage ${i} (id=${s.id})\n${prettyPrint(s.template)}`).join("\n\n");
     },
     compile(options) {
+      // Cache key: the effect's content hash (`id`) plus the compile
+      // options. We deliberately do NOT hash the sampled hole values
+      // into the key. Holes are closure-captured values from the
+      // marker's lexical scope, baked into the WGSL as literals; in
+      // every realistic effect they're module-level constants, so for
+      // a given `id` they don't vary between compiles. Hashing the
+      // (multi-KB) sampled-stage data on *every* `compile()` call was
+      // real overhead on the hot path — at 20k render objects this is
+      // hit ~40k times (heap eligibility check + heap-spec build).
+      // Now the hot path is just a short string concat + a Map lookup;
+      // hole sampling + the IR pipeline only run on a genuine miss.
+      //
+      // Constraint this assumes: anything that makes two effects with
+      // the *same `id`* compile to *different* WGSL must be folded into
+      // the `id` at the construction site — that already holds for ids
+      // (all built via `combineHashes` over input ids + transform
+      // params) and is required of holes too. An effect whose holes
+      // vary per-instance for a fixed `id` (e.g. a `vertex(...)` marker
+      // closing over a function parameter) breaks this — pass that
+      // value as a uniform instead.
+      //
+      // The cache is module-level and never evicted; in practice it's
+      // bounded by the app's distinct effect count (tens), so the
+      // "leak" is a non-issue.
+      const cacheKey = `${id}:${options.target}` +
+        (options.skipOptimisations ? ":raw" : "") +
+        layoutKey(options.fragmentOutputLayout);
+      const cached = moduleCompileCache.get(cacheKey);
+      if (cached) return cached;
+
+      // Miss — do the work: sample holes, fill templates, compile.
       const sampledPerStage: Record<string, HoleValue>[] = [];
       for (const s of stages) {
         const sampled: Record<string, HoleValue> = {};
@@ -345,11 +381,6 @@ function makeEffect(stages: readonly Stage[], id: string): Effect {
         }
         sampledPerStage.push(sampled);
       }
-      const cacheKey = `${id}:${hashValue(sampledPerStage)}:${options.target}` +
-        (options.skipOptimisations ? ":raw" : "") +
-        layoutKey(options.fragmentOutputLayout);
-      const cached = moduleCompileCache.get(cacheKey);
-      if (cached) return cached;
 
       const allValues: ValueDef[] = [];
       for (let i = 0; i < stages.length; i++) {
@@ -529,14 +560,17 @@ export function computeShader(
       return `// compute stage (id=${stageId})\n${prettyPrint(template)}`;
     },
     compile(options) {
-      const sampled: Record<string, HoleValue> = {};
-      for (const [name, getter] of Object.entries(holes)) sampled[name] = getter();
-      const cacheKey = `${stageId}:${hashValue(sampled)}:${options.target}` +
+      // Key by the stage's content hash + options only — see the note
+      // in `makeEffect`'s `compile` for why the sampled holes aren't
+      // hashed into the key.
+      const cacheKey = `${stageId}:${options.target}` +
         (options.skipOptimisations ? ":raw" : "") +
         layoutKey(options.fragmentOutputLayout);
       const cached = cache.get(cacheKey);
       if (cached) return cached;
 
+      const sampled: Record<string, HoleValue> = {};
+      for (const [name, getter] of Object.entries(holes)) sampled[name] = getter();
       const filled = resolveHoles(template, sampled);
       const merged: Module = { types: [], values: filled.values };
       const baseCompiled = compileModule(merged, options);

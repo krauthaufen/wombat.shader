@@ -44,10 +44,16 @@ function fragmentTemplate(): Module {
   return { types: [], values: [{ kind: "Entry", entry }] };
 }
 
+// Fresh explicit stage ids per test — the compile cache is keyed on
+// the effect id (not the sampled holes), so structurally-identical
+// templates across tests would otherwise share a cache slot.
+let idSeq = 0;
+const freshId = (): string => `test/stage-effect/${++idSeq}`;
+
 describe("stage / effect", () => {
   it("compiles a stage with closure holes via getters", () => {
-    let r = 0.1, g = 0.2, b = 0.3;
-    const fx = effect(stage(fragmentTemplate(), { tint: () => [r, g, b] }));
+    const r = 0.1, g = 0.2, b = 0.3;
+    const fx = effect(stage(fragmentTemplate(), { tint: () => [r, g, b] }, freshId()));
     const compiled = fx.compile({ target: "wgsl" });
     const wgsl = compiled.stages[0]!.source;
     expect(wgsl).not.toContain("tint");
@@ -56,28 +62,33 @@ describe("stage / effect", () => {
     expect(wgsl).toMatch(/0\.3/);
   });
 
-  it("re-sampling the getters reflects new values on next compile", () => {
+  it("compile is cached by effect id — re-sampling getters does not re-emit", () => {
+    // Holes are inlined as IR constants at the first compile; the
+    // cache key is the effect id (not the hole values), so a later
+    // compile returns the same `CompiledEffect` even if the getter
+    // would now return something different.
     const ref = { tint: [1.0, 0.0, 0.0] as [number, number, number] };
-    const fx = effect(stage(fragmentTemplate(), { tint: () => ref.tint }));
+    const fx = effect(stage(fragmentTemplate(), { tint: () => ref.tint }, freshId()));
 
-    const a = fx.compile({ target: "wgsl" }).stages[0]!.source;
-    expect(a).toMatch(/1\.0/);
+    const a = fx.compile({ target: "wgsl" });
+    expect(a.stages[0]!.source).toMatch(/1\.0/);
 
     ref.tint = [0.0, 1.0, 0.0];
-    const b = fx.compile({ target: "wgsl" }).stages[0]!.source;
-    expect(b).toMatch(/0\.0f?,\s*1\.0f?,\s*0\.0f?/);
+    const b = fx.compile({ target: "wgsl" });
+    expect(b).toBe(a);
+    expect(b.stages[0]!.source).toMatch(/1\.0/);
   });
 
   it("missing hole getter throws at compile time", () => {
-    const fx = effect(stage(fragmentTemplate(), {}));
+    const fx = effect(stage(fragmentTemplate(), {}, freshId()));
     expect(() => fx.compile({ target: "wgsl" })).toThrow(/closure hole "tint"/);
   });
 
   it("effect(...) flattens single-stage Effects (vertex + fragment)", () => {
     // stage() returns a single-stage Effect; effect(e1, e2) flattens
     // their stage lists into a single Effect with two stages.
-    const fxA = stage(fragmentTemplate(), { tint: () => [0.1, 0.2, 0.3] });
-    const fxB = stage(fragmentTemplate(), { tint: () => [0.4, 0.5, 0.6] });
+    const fxA = stage(fragmentTemplate(), { tint: () => [0.1, 0.2, 0.3] }, freshId());
+    const fxB = stage(fragmentTemplate(), { tint: () => [0.4, 0.5, 0.6] }, freshId());
     const merged = effect(fxA, fxB);
     expect(merged.stages).toHaveLength(2);
   });

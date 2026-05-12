@@ -1,6 +1,10 @@
-// Per-Effect compile cache. Cache key = effect.id + sampled-hole
-// values hash + target. Same key on a second `compile()` returns
-// the same `CompiledEffect` reference (i.e. no re-emit).
+// Effect compile cache. Cache key = effect.id + target (+ skipOpt +
+// fragment-output-layout). Same key on a second `compile()` returns
+// the *same* `CompiledEffect` reference (no re-emit). The sampled
+// closure-hole values are NOT part of the key — for a given effect id
+// the holes are assumed invariant (they're module-level-const captures
+// in every realistic effect), so two compiles of the same id share a
+// result regardless of what the hole getters return between them.
 
 import { describe, expect, it } from "vitest";
 import { effect, stage } from "@aardworx/wombat.shader";
@@ -39,30 +43,35 @@ function fragmentTemplate(): Module {
   return { types: [], values: [{ kind: "Entry", entry }] };
 }
 
+// Each test uses a fresh explicit stage id so it gets its own cache
+// slot — otherwise structurally-identical templates across tests (same
+// `hashModule`) would collide on the now-hole-independent cache key.
+let idSeq = 0;
+const freshId = (): string => `test/effect-cache/${++idSeq}`;
+
 describe("Effect compile cache", () => {
-  it("same hole values + target → same CompiledEffect (cache hit)", () => {
+  it("second compile with same options → same CompiledEffect (cache hit)", () => {
     const v: number[] = [0.1, 0.2, 0.3];
-    const fx = effect(stage(fragmentTemplate(), { tint: () => v }));
+    const fx = effect(stage(fragmentTemplate(), { tint: () => v }, freshId()));
     const a = fx.compile({ target: "wgsl" });
     const b = fx.compile({ target: "wgsl" });
     expect(a).toBe(b);
   });
 
-  it("different hole values → distinct CompiledEffects", () => {
+  it("hole-getter values are NOT part of the key — same id ⇒ same result", () => {
+    // The compile cache is keyed on the effect id, not the sampled
+    // holes; once compiled, mutating what a hole getter returns does
+    // not change the cached `CompiledEffect`.
     const ref = { tint: [0.1, 0.2, 0.3] as [number, number, number] };
-    const fx = effect(stage(fragmentTemplate(), { tint: () => ref.tint }));
+    const fx = effect(stage(fragmentTemplate(), { tint: () => ref.tint }, freshId()));
     const a = fx.compile({ target: "wgsl" });
     ref.tint = [0.4, 0.5, 0.6];
     const b = fx.compile({ target: "wgsl" });
-    expect(a).not.toBe(b);
-    // First key is still cached: revert to original values → same a.
-    ref.tint = [0.1, 0.2, 0.3];
-    const c = fx.compile({ target: "wgsl" });
-    expect(c).toBe(a);
+    expect(b).toBe(a);
   });
 
   it("different target → distinct cache entries", () => {
-    const fx = effect(stage(fragmentTemplate(), { tint: () => [0.1, 0.2, 0.3] }));
+    const fx = effect(stage(fragmentTemplate(), { tint: () => [0.1, 0.2, 0.3] }, freshId()));
     const w = fx.compile({ target: "wgsl" });
     const g = fx.compile({ target: "glsl" });
     expect(w).not.toBe(g);
@@ -71,7 +80,7 @@ describe("Effect compile cache", () => {
   });
 
   it("`skipOptimisations` and the optimised path don't collide", () => {
-    const fx = effect(stage(fragmentTemplate(), { tint: () => [0.1, 0.2, 0.3] }));
+    const fx = effect(stage(fragmentTemplate(), { tint: () => [0.1, 0.2, 0.3] }, freshId()));
     const o = fx.compile({ target: "wgsl" });
     const r = fx.compile({ target: "wgsl", skipOptimisations: true });
     expect(o).not.toBe(r);
