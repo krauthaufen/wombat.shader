@@ -66,6 +66,15 @@ function layoutKey(layout: FragmentOutputLayout | undefined): string {
   return ":fbo[" + entries.map(([n, l]) => `${n}=${l}`).join("|") + "]";
 }
 
+/** Cache-key fragment for the `instanceUniforms` pass. `compileModule`
+ *  rewrites the named uniforms to per-instance attribute reads when this
+ *  is set, so two compiles of the same effect id with different
+ *  `instanceAttributes` must NOT share a cache slot. */
+function instanceAttrsKey(attrs: ReadonlySet<string> | undefined): string {
+  if (attrs === undefined || attrs.size === 0) return "";
+  return ":inst[" + [...attrs].sort().join(",") + "]";
+}
+
 export type HoleGetter = () => HoleValue;
 export type HoleGetters = Readonly<Record<string, HoleGetter>>;
 
@@ -368,7 +377,8 @@ function makeEffect(stages: readonly Stage[], id: string): Effect {
       // "leak" is a non-issue.
       const cacheKey = `${id}:${options.target}` +
         (options.skipOptimisations ? ":raw" : "") +
-        layoutKey(options.fragmentOutputLayout);
+        layoutKey(options.fragmentOutputLayout) +
+        instanceAttrsKey(options.instanceAttributes);
       const cached = moduleCompileCache.get(cacheKey);
       if (cached) return cached;
 

@@ -12,11 +12,18 @@
 import type { Effect } from "./stage.js";
 import { combineHashes } from "../ir/hash.js";
 
+// Module-level cache: a wrapped effect's identity is fully determined by
+// `(inner.id, sorted attrNames)`, so two calls with the same arguments
+// return the same wrapper object. (The downstream compile cache is keyed
+// on the *id* anyway, so re-allocating wrappers was harmless — but the
+// model is "transform → deterministic id → reuse", so we make it so.)
+const _instanceEffectCache = new Map<string, Effect>();
+
 /**
  * Return a new Effect whose `compile()` applies the `instanceUniforms`
  * pass with `attrNames` set. Reading a wrapped effect's id, dumping
  * its IR, or composing it via `effect(...)` all behave the same as
- * the inner effect.
+ * the inner effect. Same `(inner, attrNames)` ⇒ same returned object.
  */
 export function instanceEffect(
   inner: Effect,
@@ -25,7 +32,9 @@ export function instanceEffect(
   if (attrNames.size === 0) return inner;
   const sorted = [...attrNames].sort();
   const id = combineHashes(inner.id, "INST", ...sorted);
-  return {
+  const cached = _instanceEffectCache.get(id);
+  if (cached !== undefined) return cached;
+  const wrapped: Effect = {
     stages: inner.stages,
     id,
     dumpIR: () => inner.dumpIR(),
@@ -42,4 +51,6 @@ export function instanceEffect(
       return instanceEffect(inner.rename(spec), attrNames);
     },
   };
+  _instanceEffectCache.set(id, wrapped);
+  return wrapped;
 }
