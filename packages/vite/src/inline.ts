@@ -47,8 +47,8 @@ import {
   unwrapStorageBuffer, unwrapStorageTexture,
 } from "./typeMapper.js";
 
-const MARKER_NAMES = new Set<MarkerName>(["vertex", "fragment", "compute"]);
-type MarkerName = "vertex" | "fragment" | "compute";
+const MARKER_NAMES = new Set<MarkerName>(["vertex", "fragment", "compute", "rule"]);
+type MarkerName = "vertex" | "fragment" | "compute" | "rule";
 
 const SHIPPED_TYPE_NAMES = new Set([
   // primitives + scalar shorthands
@@ -124,7 +124,7 @@ export function transformInlineShaders(
   // `derivedUniform(arrow)` (wombat.rendering) is recognised too — we don't
   // replace the call, we append a leaf-type-hint map read from the file's
   // `UniformScope` augmentation so `u.<Name>` reads its real WGSL type.
-  if (!/\b(vertex|fragment|compute|derivedUniform)\s*(?:<[^()]*>)?\s*\(/.test(source)) return null;
+  if (!/\b(vertex|fragment|compute|rule|derivedUniform)\s*(?:<[^()]*>)?\s*\(/.test(source)) return null;
   if (!/from\s+["']@aardworx\/wombat\.(shader|rendering)\b/.test(source)) return null;
 
   // Update the resolver's in-memory copy so the type checker sees the
@@ -215,12 +215,14 @@ export function transformInlineShaders(
   // appeared. Compute uses its own factory (`computeShader`) so it
   // returns a `ComputeShader`, distinct from the graphics-stage `Effect`.
   // (derivedUniform needs no import — we only append an arg to the call.)
-  const needStage = replacements.some(r => r.marker !== "compute");
+  const needStage = replacements.some(r => r.marker === "vertex" || r.marker === "fragment");
   const needCompute = replacements.some(r => r.marker === "compute");
-  if (needStage || needCompute) {
+  const needRule = replacements.some(r => r.marker === "rule");
+  if (needStage || needCompute || needRule) {
     const imports: string[] = [];
-    if (needStage) imports.push("stage as __wombat_stage");
+    if (needStage)   imports.push("stage as __wombat_stage");
     if (needCompute) imports.push("computeShader as __wombat_compute");
+    if (needRule)    imports.push("ruleExpr as __wombat_rule");
     ms.prepend(`import { ${imports.join(", ")} } from "@aardworx/wombat.shader";\n`);
   }
 
@@ -416,15 +418,22 @@ function transformMarkerCall(
     ...helperSources,
   ].join("\n\n");
 
-  const stageKind: StageKind = marker;
+  // `rule` is not a real shader stage — there's no graphics I/O, no
+  // workgroup, no entrypoint. We piggyback on the existing parse
+  // pipeline by declaring it as a synthetic compute entry; the
+  // post-parse step below (`withDerivedOutputs` / `liftReturns`) is
+  // skipped so the returned expression is preserved unmodified for
+  // the consumer (wombat.rendering's `derivedMode`) to extract.
+  const stageKind: StageKind = marker === "rule" ? "compute" : marker;
   // Brand-aware input / output extraction. Skipped (entry stays
   // bare) when there's no checker, when the type-inference layers
-  // produced nothing, or for compute stage (which goes through
-  // the second-param `ComputeBuiltins` path).
-  const brandedInputs = checker !== undefined && inferred?.inputType !== undefined
+  // produced nothing, for compute stage (which goes through
+  // the second-param `ComputeBuiltins` path), and for rule (no
+  // graphics I/O).
+  const brandedInputs = marker !== "rule" && checker !== undefined && inferred?.inputType !== undefined
     ? safeExtractEntryParams(checker, inferred.inputType, stageKind, "in")
     : undefined;
-  const brandedOutputs = checker !== undefined && inferred?.outputType !== undefined
+  const brandedOutputs = marker !== "rule" && checker !== undefined && inferred?.outputType !== undefined
     ? safeExtractEntryParams(checker, inferred.outputType, stageKind, "out")
     : undefined;
   const entry: EntryRequest = {
@@ -487,8 +496,13 @@ function transformMarkerCall(
   // the carrier's `_record` is a non-enumerable property and would
   // otherwise be stripped at stringify time, leaving the runtime with
   // a body that returns `Const(Null)` and writes nothing.
-  module = withDerivedOutputs(module, fnName, marker);
-  module = liftReturns(module);
+  // For `rule`, the body's `return` statement IS the consumer-visible
+  // value — skip the graphics-stage output synthesis + return lifting
+  // (both would mangle the return expression we want preserved).
+  if (marker !== "rule") {
+    module = withDerivedOutputs(module, fnName, marker);
+    module = liftReturns(module);
+  }
 
   // Emit replacement.
   //
@@ -515,7 +529,9 @@ function transformMarkerCall(
     : `{ ${bindingNames.map((n) => `${n}: () => ${n}`).join(", ")} }`;
   const id = hashModule(module);
   const moduleJson = JSON.stringify(module);
-  const fn = marker === "compute" ? "__wombat_compute" : "__wombat_stage";
+  const fn = marker === "compute" ? "__wombat_compute"
+           : marker === "rule"    ? "__wombat_rule"
+           :                         "__wombat_stage";
   return `${fn}(${moduleJson}, ${holesObj}, ${JSON.stringify(id)}, ${avalObj})`;
 }
 

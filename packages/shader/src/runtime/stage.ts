@@ -529,6 +529,79 @@ export function compute<B>(_fn: (builtins: B) => void): ComputeShader {
 }
 
 /**
+ * Marker — replaced at build time. Lowers a pure-expression closure
+ * body into a shader-IR `Expr`. Distinct from `vertex/fragment/compute`
+ * in that the result is NOT a shader stage / pipeline — no resource
+ * bindings, no workgroup_size, no entrypoint. The body returns a
+ * single value (scalar / vector / matrix); the build plugin extracts
+ * the returned IR `Expr` and the captured leaf inputs.
+ *
+ * Used by the rendering layer's derived-mode rules (see
+ * `@aardworx/wombat.rendering`'s `derivedMode(...)` API), and any
+ * other host code that wants to author a pure expression on per-RO
+ * uniforms using the same JS-→-IR pipeline shader stages use.
+ *
+ *     declare const u: { ModelTrafo: M44f };
+ *     declare const declared: number;  // axis-specific u32 index
+ *
+ *     const cullRule = rule(() => {
+ *       const det = determinant(mat3(u.ModelTrafo));
+ *       return det < 0 ? flipCull(declared) : declared;
+ *     });
+ */
+export function rule<R>(_fn: () => R): RuleExpr<R>;
+export function rule<B, R>(_fn: (builtins: B) => R): RuleExpr<R>;
+export function rule(_fn: unknown): RuleExpr<unknown> {
+  throw new Error(NOT_PROCESSED);
+}
+
+/**
+ * Build-time-emitted artefact for a `rule(...)` callsite.
+ *
+ * Holds the IR template (a `Module` whose entry's last statement is
+ * the returned expression), the captured `holes` getters (same
+ * closure-capture machinery as `stage()`), and a content-hashed
+ * `id`. Consumers (e.g. derivedMode in wombat.rendering) extract the
+ * expression and do per-context analysis / specialisation.
+ */
+export interface RuleExpr<R = unknown> {
+  readonly id: string;
+  /** Phantom — preserves the closure's inferred return type for callers. */
+  readonly __t?: R;
+  /** The parsed shader Module — the entry's return expr is the rule body. */
+  readonly template: Module;
+  /** Closure-captured values, keyed by leaf name (resolved at request time). */
+  readonly holes: HoleGetters;
+  /** Aval-typed captures (reactive bindings — same shape as stage()). */
+  readonly avalHoles: AvalGetters;
+  /** Pretty-print for debugging. */
+  dumpIR(): string;
+}
+
+/**
+ * Build a `RuleExpr` from a parsed shader Module. The plugin emits
+ * `__wombat_rule(template, holes, id, avalHoles)` at the call site.
+ */
+export function ruleExpr(
+  template: Module,
+  holes: HoleGetters = {},
+  id?: string,
+  avalHoles: AvalGetters = {},
+): RuleExpr {
+  template = relinkVars(template);
+  const exprId = id ?? hashModule(template);
+  return {
+    id: exprId,
+    template,
+    holes,
+    avalHoles,
+    dumpIR() {
+      return `// rule expression (id=${exprId})\n${prettyPrint(template)}`;
+    },
+  };
+}
+
+/**
  * User-facing object for a compute pipeline. One stage, plus
  * `compile(options)` returning a `CompiledEffect` (whose
  * `stages` has length 1 with `stage === "compute"`). The id is the
