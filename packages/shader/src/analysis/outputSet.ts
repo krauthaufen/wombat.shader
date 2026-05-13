@@ -321,6 +321,13 @@ export function evaluateConcrete(
     }
     case "CallIntrinsic": {
       const ci = e as { op: { name: string }; args: ReadonlyArray<Expr> };
+      // Shader-vite's `liftRuleObjectLiterals` encodes rule-body
+      // object literals as `__record:<key1>|<key2>|...` intrinsics
+      // — but `evaluateConcrete` returns numeric results only, so
+      // a record evaluation has no useful number to produce. Return
+      // `undefined`; the calling layer (wombat.rendering's heap
+      // scene) interprets these structurally rather than numerically.
+      if (ci.op.name.startsWith("__record:")) return undefined;
       const fn = intrinsics.get(ci.op.name);
       if (fn === undefined) return undefined;
       const args: number[] = [];
@@ -362,5 +369,71 @@ export function evaluateSet(
     else seen.add(v);
   }
   const resolved = [...seen].sort((a, b) => a - b);
+  return { resolved, unresolvedCount: unresolved };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Structural value evaluation (for rules whose outputs are JS objects)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Evaluate an IR expression to an arbitrary JS value (number, boolean,
+ * or plain object). Object-literal returns in a rule body lower to
+ * `__record:<keys>` intrinsics (see `liftRuleObjectLiterals` in
+ * `@aardworx/wombat.shader-vite`); we recognise that intrinsic and
+ * build a JS object by recursively evaluating each field.
+ *
+ * Returns `undefined` for any unresolvable subexpression — the caller
+ * treats those as unfoldable.
+ */
+export function evaluateStructural(
+  e: Expr,
+  env: EvalEnv,
+  intrinsics: IntrinsicEvalTable = new Map(),
+): unknown {
+  const k = (e as { kind: string }).kind;
+  if (k === "CallIntrinsic") {
+    const ci = e as { op: { name: string }; args: ReadonlyArray<Expr> };
+    if (ci.op.name.startsWith("__record:")) {
+      const keys = ci.op.name.slice("__record:".length).split("|");
+      if (keys.length !== ci.args.length) return undefined;
+      const obj: Record<string, unknown> = {};
+      for (let i = 0; i < keys.length; i++) {
+        const v = evaluateStructural(ci.args[i]!, env, intrinsics);
+        if (v === undefined) return undefined;
+        obj[keys[i]!] = v;
+      }
+      return obj;
+    }
+  }
+  // Fall through to numeric eval for everything else.
+  return evaluateConcrete(e, env, intrinsics);
+}
+
+/**
+ * Like `evaluateSet`, but for rule bodies whose outputs may be
+ * structured JS objects (not just numbers). Returns a deterministic-
+ * order array of distinct JS values, sorted by `stableStringify`.
+ *
+ * Used by `derivedMode` rules whose axis's `ModeValue` is an object
+ * shape (e.g. blend — full `AttachmentBlend` struct). For enum axes
+ * (cull etc.) the rule body still returns u32 indices and the
+ * `resolved` array is numeric.
+ */
+export function evaluateStructuralSet(
+  set: SymbolicOutputSet,
+  env: EvalEnv,
+  intrinsics: IntrinsicEvalTable = new Map(),
+): { readonly resolved: ReadonlyArray<unknown>; readonly unresolvedCount: number } {
+  const byKey = new Map<string, unknown>();
+  let unresolved = 0;
+  for (const e of set.exprs) {
+    const v = evaluateStructural(e, env, intrinsics);
+    if (v === undefined) { unresolved++; continue; }
+    byKey.set(stableStringify(v), v);
+  }
+  const resolved = [...byKey.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, v]) => v);
   return { resolved, unresolvedCount: unresolved };
 }

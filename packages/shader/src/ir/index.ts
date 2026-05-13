@@ -77,6 +77,7 @@ export type { SourceMap, BuildSourceMapInput } from "./sourcemap.js";
 export {
   analyseOutputSet, substituteVars, unfoldConditional,
   evaluateConcrete, evaluateSet,
+  evaluateStructural, evaluateStructuralSet,
 } from "../analysis/outputSet.js";
 export type {
   SymbolicOutputSet, IntrinsicEvalTable, EvalEnv,
