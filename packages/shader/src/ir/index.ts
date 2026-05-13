@@ -76,5 +76,8 @@ export type { SourceMap, BuildSourceMapInput } from "./sourcemap.js";
 // derivedMode to size pipeline slots from a rule's possible outputs).
 export {
   analyseOutputSet, substituteVars, unfoldConditional,
+  evaluateConcrete, evaluateSet,
 } from "../analysis/outputSet.js";
-export type { SymbolicOutputSet } from "../analysis/outputSet.js";
+export type {
+  SymbolicOutputSet, IntrinsicEvalTable, EvalEnv,
+} from "../analysis/outputSet.js";

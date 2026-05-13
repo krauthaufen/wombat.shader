@@ -215,3 +215,152 @@ export function unfoldConditional(e: Expr): ReadonlyArray<Expr> {
   const c = e as { ifTrue: Expr; ifFalse: Expr };
   return [...unfoldConditional(c.ifTrue), ...unfoldConditional(c.ifFalse)];
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Concrete evaluation
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Map from intrinsic name → numeric implementation, used to fold
+ * named function calls in `evaluateConcrete`. Consumer-supplied so
+ * each axis can declare its own helper semantics (e.g. cull has
+ * `flipCull: 0→0, 1→2, 2→1`).
+ *
+ * Returning `undefined` from the implementation means "I can't fold
+ * this here" — the caller treats the call as unresolved.
+ */
+export type IntrinsicEvalTable = ReadonlyMap<
+  string,
+  (args: ReadonlyArray<number>) => number | undefined
+>;
+
+/**
+ * Concrete-value environment for `evaluateConcrete`. Each key is a
+ * `ReadInput` name or a `Var.name`; the value is the numeric
+ * substitution.
+ */
+export type EvalEnv = ReadonlyMap<string, number>;
+
+/**
+ * Try to evaluate `e` to a concrete number under the supplied env +
+ * intrinsic table. Returns `undefined` (UNRESOLVED) when the
+ * expression contains any leaf not bound in `env` or any node we
+ * can't fold.
+ *
+ * Consumer pattern (mode-rule slot sizing):
+ *
+ *   const exprs = analyseOutputSet(body).exprs;
+ *   const env = new Map<string, number>([["declared", currentDeclaredU32]]);
+ *   const intrinsics = registry.forAxis("cull");
+ *   const slots = new Set<number>();
+ *   for (const e of exprs) {
+ *     const v = evaluateConcrete(e, env, intrinsics);
+ *     if (v !== undefined) slots.add(v);
+ *   }
+ *   // slots.size == slot count for this bucket+declared.
+ */
+export function evaluateConcrete(
+  e: Expr,
+  env: EvalEnv,
+  intrinsics: IntrinsicEvalTable = new Map(),
+): number | undefined {
+  const k = (e as { kind: string }).kind;
+  switch (k) {
+    case "Const": {
+      const v = (e as { value: { kind: string; value: number | boolean } }).value;
+      if (v.kind === "Int" || v.kind === "Float") return v.value as number;
+      if (v.kind === "Bool") return v.value ? 1 : 0;
+      return undefined;
+    }
+    case "ReadInput": return env.get((e as { name: string }).name);
+    case "Var":       return env.get((e as { var: { name: string } }).var.name);
+    case "Neg": {
+      const v = evaluateConcrete((e as { value: Expr }).value, env, intrinsics);
+      return v === undefined ? undefined : -v;
+    }
+    case "Not": {
+      const v = evaluateConcrete((e as { value: Expr }).value, env, intrinsics);
+      return v === undefined ? undefined : (v ? 0 : 1);
+    }
+    case "Add": case "Sub": case "Mul": case "Div": case "Mod":
+    case "Lt": case "Le": case "Gt": case "Ge": case "Eq": case "Neq":
+    case "And": case "Or": case "BitAnd": case "BitOr": case "BitXor":
+    case "ShiftLeft": case "ShiftRight": {
+      const bin = e as { lhs: Expr; rhs: Expr };
+      const a = evaluateConcrete(bin.lhs, env, intrinsics);
+      const b = evaluateConcrete(bin.rhs, env, intrinsics);
+      if (a === undefined || b === undefined) return undefined;
+      switch (k) {
+        case "Add": return a + b;
+        case "Sub": return a - b;
+        case "Mul": return a * b;
+        case "Div": return b === 0 ? undefined : a / b;
+        case "Mod": return b === 0 ? undefined : a % b;
+        case "Lt":  return a <  b ? 1 : 0;
+        case "Le":  return a <= b ? 1 : 0;
+        case "Gt":  return a >  b ? 1 : 0;
+        case "Ge":  return a >= b ? 1 : 0;
+        case "Eq":  return a === b ? 1 : 0;
+        case "Neq": return a !== b ? 1 : 0;
+        case "And": return (a && b) ? 1 : 0;
+        case "Or":  return (a || b) ? 1 : 0;
+        case "BitAnd": return (a & b) >>> 0;
+        case "BitOr":  return (a | b) >>> 0;
+        case "BitXor": return (a ^ b) >>> 0;
+        case "ShiftLeft":  return ((a << (b & 31)) >>> 0);
+        case "ShiftRight": return (a >>> (b & 31));
+      }
+      return undefined;
+    }
+    case "Conditional": {
+      const cv = evaluateConcrete((e as { cond: Expr }).cond, env, intrinsics);
+      if (cv === undefined) return undefined;
+      return cv
+        ? evaluateConcrete((e as { ifTrue: Expr }).ifTrue, env, intrinsics)
+        : evaluateConcrete((e as { ifFalse: Expr }).ifFalse, env, intrinsics);
+    }
+    case "CallIntrinsic": {
+      const ci = e as { op: { name: string }; args: ReadonlyArray<Expr> };
+      const fn = intrinsics.get(ci.op.name);
+      if (fn === undefined) return undefined;
+      const args: number[] = [];
+      for (const a of ci.args) {
+        const v = evaluateConcrete(a, env, intrinsics);
+        if (v === undefined) return undefined;
+        args.push(v);
+      }
+      return fn(args);
+    }
+    case "Convert":
+    case "ConvertMatrix":
+      return evaluateConcrete((e as { value: Expr }).value, env, intrinsics);
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Convenience: evaluate every expression in a `SymbolicOutputSet`
+ * and return the set of distinct concrete numbers we could fold to.
+ * Expressions that don't fold are dropped (they remain symbolic in
+ * the caller's bookkeeping — the slot count under-approximates by
+ * one per unfoldable expression).
+ *
+ * Returns a deterministic-order array (sorted ascending) so two
+ * calls with the same inputs yield the same slot ordering.
+ */
+export function evaluateSet(
+  set: SymbolicOutputSet,
+  env: EvalEnv,
+  intrinsics: IntrinsicEvalTable = new Map(),
+): { readonly resolved: ReadonlyArray<number>; readonly unresolvedCount: number } {
+  const seen = new Set<number>();
+  let unresolved = 0;
+  for (const e of set.exprs) {
+    const v = evaluateConcrete(e, env, intrinsics);
+    if (v === undefined) unresolved++;
+    else seen.add(v);
+  }
+  const resolved = [...seen].sort((a, b) => a - b);
+  return { resolved, unresolvedCount: unresolved };
+}

@@ -3,8 +3,9 @@
 import { describe, expect, it } from "vitest";
 import {
   analyseOutputSet, unfoldConditional, substituteVars,
+  evaluateConcrete, evaluateSet,
   Tu32, Tf32,
-  type Expr, type Stmt, type Var,
+  type Expr, type Stmt, type Var, type IntrinsicEvalTable,
 } from "@aardworx/wombat.shader/ir";
 
 function u32(value: number): Expr {
@@ -107,6 +108,77 @@ describe("analyseOutputSet", () => {
     const env = new Map<string, Expr>([["x", u32(5)]]);
     const out = substituteVars(e, env) as { lhs: { value: { value: number } } };
     expect(out.lhs.value.value).toBe(5);
+  });
+
+  it("evaluateConcrete folds arithmetic + conditionals against an env", () => {
+    // (declared < 1) ? 0 : (declared + 5)
+    const declared: Expr = { kind: "ReadInput", scope: "Uniform", name: "declared", type: Tu32 };
+    const body: Expr = cond(
+      lt(declared, u32(1)),
+      u32(0),
+      { kind: "Add", lhs: declared, rhs: u32(5), type: Tu32 },
+    );
+    const env0 = new Map<string, number>([["declared", 0]]);
+    const env3 = new Map<string, number>([["declared", 3]]);
+    expect(evaluateConcrete(body, env0)).toBe(0);
+    expect(evaluateConcrete(body, env3)).toBe(8);
+  });
+
+  it("evaluateConcrete folds CallIntrinsic via the registry", () => {
+    const flipCullTable: IntrinsicEvalTable = new Map([
+      ["flipCull", (args: ReadonlyArray<number>) => {
+        const x = args[0]!;
+        return x === 1 ? 2 : x === 2 ? 1 : 0;
+      }],
+    ]);
+    const declared: Expr = { kind: "ReadInput", scope: "Uniform", name: "declared", type: Tu32 };
+    const call: Expr = {
+      kind: "CallIntrinsic",
+      op: { name: "flipCull", returnTypeOf: () => Tu32, pure: true, emit: { glsl: "flipCull", wgsl: "flipCull" } },
+      args: [declared],
+      type: Tu32,
+    };
+    expect(evaluateConcrete(call, new Map([["declared", 1]]), flipCullTable)).toBe(2);
+    expect(evaluateConcrete(call, new Map([["declared", 2]]), flipCullTable)).toBe(1);
+    expect(evaluateConcrete(call, new Map([["declared", 0]]), flipCullTable)).toBe(0);
+  });
+
+  it("evaluateSet folds the cull-rule symbolic set into per-declared slot counts", () => {
+    const flipCullTable: IntrinsicEvalTable = new Map([
+      ["flipCull", (args: ReadonlyArray<number>) => {
+        const x = args[0]!;
+        return x === 1 ? 2 : x === 2 ? 1 : 0;
+      }],
+    ]);
+    const flipCallStub: Expr = {
+      kind: "CallIntrinsic",
+      op: { name: "flipCull", returnTypeOf: () => Tu32, pure: true, emit: { glsl: "flipCull", wgsl: "flipCull" } },
+      args: [declaredLeaf],
+      type: Tu32,
+    };
+    const det: Expr = { kind: "ReadInput", scope: "Uniform", name: "det", type: Tf32 };
+    // Note: at slot-counting time we evaluate just the post-flatten
+    // output set — det need not be bound because the analysis
+    // produced two independent expressions, only one of which reads
+    // det (via the original Conditional). Here `det` is unreferenced
+    // by either branch after the flatten, so we just bind `declared`.
+    void det;
+    const set = analyseOutputSet(ret({
+      kind: "Conditional", cond: lt(det, f32(0)),
+      ifTrue: flipCallStub, ifFalse: declaredLeaf, type: Tu32,
+    }));
+    // declared=2 ("back") → {flipCull(2)=1, 2} → 2 slots.
+    expect(evaluateSet(set, new Map([["declared", 2]]), flipCullTable)).toEqual(
+      { resolved: [1, 2], unresolvedCount: 0 },
+    );
+    // declared=0 ("none") → {flipCull(0)=0, 0} → 1 slot.
+    expect(evaluateSet(set, new Map([["declared", 0]]), flipCullTable)).toEqual(
+      { resolved: [0], unresolvedCount: 0 },
+    );
+    // declared=1 ("front") → {flipCull(1)=2, 1} → 2 slots.
+    expect(evaluateSet(set, new Map([["declared", 1]]), flipCullTable)).toEqual(
+      { resolved: [1, 2], unresolvedCount: 0 },
+    );
   });
 
   it("declared-flip-cull body: analysis yields the cull-rule's two-element set", () => {
