@@ -71,3 +71,10 @@ export { hashModule, hashValue, combineHashes, stableStringify } from "./hash.js
 export { prettyPrint } from "./pretty.js";
 export { buildSourceMap } from "./sourcemap.js";
 export type { SourceMap, BuildSourceMapInput } from "./sourcemap.js";
+
+// IR analyses (used by consumers like @aardworx/wombat.rendering's
+// derivedMode to size pipeline slots from a rule's possible outputs).
+export {
+  analyseOutputSet, substituteVars, unfoldConditional,
+} from "../analysis/outputSet.js";
+export type { SymbolicOutputSet } from "../analysis/outputSet.js";
