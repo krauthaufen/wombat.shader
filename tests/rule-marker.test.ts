@@ -33,6 +33,25 @@ describe("rule() marker", () => {
     expect(out.code).toMatch(/"kind":"ReturnValue"[\s\S]*?"value":42/);
   });
 
+  it("lifts object-literal returns into a serialisable `__record:...` CallIntrinsic", () => {
+    // For graphics stages the carrier is post-processed into
+    // WriteOutput statements; for rule we want the OBJECT itself to
+    // survive to the runtime — heap scene fingerprints distinct
+    // returns and uses them directly as pipeline-mode values.
+    const src = `
+      import { rule } from "@aardworx/wombat.shader";
+      const r = rule(() => ({ srcFactor: 1, dstFactor: 2, op: 0 }));
+    `;
+    const out = transformInlineShaders(src, "/x/app.ts")!;
+    // The lifted form encodes field names in the op name.
+    expect(out.code).toMatch(/"name":"__record:srcFactor\|dstFactor\|op"/);
+    // The three field VALUES become CallIntrinsic args (consts).
+    expect(out.code).toMatch(/"value":1[^0-9]/);
+    expect(out.code).toMatch(/"value":2[^0-9]/);
+    // Carrier is NOT a bare Const(Null) anymore in the return.
+    expect(out.code).not.toMatch(/"kind":"ReturnValue"[\s\S]*?"value":\{\s*"kind":"Null"/);
+  });
+
   it("supports control flow in the body (if / locals)", () => {
     // The free-identifier path needs the TS type checker (resolver)
     // for ambient `declare const u` lookups — that's how the real

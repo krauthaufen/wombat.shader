@@ -28,10 +28,10 @@ export type {
 export type { LayoutInfo, LayoutTarget, FieldLayout } from "./layout.js";
 export { computeLayout } from "./layout.js";
 
-export { stage, effect, vertex, fragment, compute, computeShader } from "./stage.js";
+export { stage, effect, vertex, fragment, compute, computeShader, rule, ruleExpr } from "./stage.js";
 export { instanceEffect } from "./instanceEffect.js";
 export type {
-  Stage, Effect, ComputeShader,
+  Stage, Effect, ComputeShader, RuleExpr,
   HoleGetter, HoleGetters,
   StageSubstitution, EffectSubstitution,
   StageRename, EffectRename,

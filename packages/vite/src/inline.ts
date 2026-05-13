@@ -502,6 +502,15 @@ function transformMarkerCall(
   if (marker !== "rule") {
     module = withDerivedOutputs(module, fnName, marker);
     module = liftReturns(module);
+  } else {
+    // Object literals in rule bodies translate to a "carrier" Expr
+    // (`Const(Null)` with a non-enumerable `_record: Map<name, Expr>`
+    // property). The non-enumerable property is stripped by
+    // `JSON.stringify` — so we have to convert each carrier into a
+    // serialisable form BEFORE the module is JSON'd. The downstream
+    // consumer (wombat.rendering's heapScene) recognises the lifted
+    // form and folds it into a JS object during slot sizing.
+    module = liftRuleObjectLiterals(module);
   }
 
   // Emit replacement.
@@ -732,6 +741,125 @@ function withStorageBufferDecls(
 // ─────────────────────────────────────────────────────────────────────
 // Derive entry outputs from the return-record carrier
 // ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Lift object-literal carriers in a rule body into a serialisable IR
+ * form so the consumer can read them after JSON round-trip.
+ *
+ * The frontend's `translateObjectLiteral` produces a `Const(Null)`
+ * with a non-enumerable `_record: Map<string, Expr>` property. For
+ * graphics stages, `withDerivedOutputs` walks this carrier and
+ * synthesises stage outputs (so the carrier never reaches
+ * JSON.stringify). For `rule`, we want the OBJECT itself to survive
+ * to the runtime — the heap scene reads its fields, evaluates them,
+ * and dedupes structurally identical returns into pipeline slots.
+ *
+ * Encoding: we replace each carrier with a `CallIntrinsic` whose
+ * op.name encodes the field names (`__record:f1|f2|f3`) and whose
+ * args are the field-value Exprs in declaration order. The kernel
+ * codegen never emits this intrinsic — the rendering side rewrites
+ * each rule-output Expr to a `Const(u32, slotIdx)` before emission.
+ */
+function liftRuleObjectLiterals(module: Module): Module {
+  const seenRecordTypes = new Set<string>();
+  const mapStmt = (s: Stmt): Stmt => {
+    const obj = s as Record<string, unknown>;
+    const out: Record<string, unknown> = { ...obj };
+    let changed = false;
+    for (const k of Object.keys(out)) {
+      const v = out[k];
+      if (v !== null && typeof v === "object") {
+        if ("kind" in (v as object) && !Array.isArray(v)) {
+          const isStmt = (v as { kind: string }).kind && /^(Nop|Expression|Declare|Write|Sequential|Isolated|Return|ReturnValue|Break|Continue|If|For|While|DoWhile|Loop|Switch|Discard|Barrier|WriteOutput|Increment|Decrement)$/.test((v as { kind: string }).kind);
+          if (isStmt) {
+            const sub = mapStmt(v as Stmt);
+            if (sub !== v) { out[k] = sub; changed = true; }
+          } else {
+            const sub = mapExpr(v as Expr);
+            if (sub !== v) { out[k] = sub; changed = true; }
+          }
+        } else if (Array.isArray(v)) {
+          let arrChanged = false;
+          const mapped = v.map((c: unknown) => {
+            if (c !== null && typeof c === "object" && "kind" in (c as object)) {
+              const kind = (c as { kind: string }).kind;
+              const isStmt = /^(Nop|Expression|Declare|Write|Sequential|Isolated|Return|ReturnValue|Break|Continue|If|For|While|DoWhile|Loop|Switch|Discard|Barrier|WriteOutput|Increment|Decrement)$/.test(kind);
+              const sub = isStmt ? mapStmt(c as Stmt) : mapExpr(c as Expr);
+              if (sub !== c) arrChanged = true;
+              return sub;
+            }
+            return c;
+          });
+          if (arrChanged) { out[k] = mapped; changed = true; }
+        }
+      }
+    }
+    return changed ? (out as unknown as Stmt) : s;
+  };
+  const mapExpr = (e: Expr): Expr => {
+    const ex = e as unknown as { kind: string; type: Type; value?: { kind: string } };
+    if (ex.kind === "Const" && ex.value !== undefined && ex.value.kind === "Null") {
+      const carrier = e as unknown as { _record?: Map<string, Expr> };
+      const rec = carrier._record;
+      if (rec !== undefined) {
+        const keys: string[] = [];
+        const args: Expr[] = [];
+        for (const [k, v] of rec) {
+          keys.push(k);
+          args.push(mapExpr(v));
+        }
+        const recName = `__record:${keys.join("|")}`;
+        seenRecordTypes.add(recName);
+        const lifted: Expr = {
+          kind: "CallIntrinsic",
+          op: {
+            name: recName,
+            returnTypeOf: (() => ({ kind: "Bool" })) as never,
+            pure: true,
+            emit: { glsl: recName, wgsl: recName },
+          },
+          args,
+          type: { kind: "Bool" } as Type,
+        } as unknown as Expr;
+        return lifted;
+      }
+    }
+    // Generic recurse for non-record Exprs.
+    const obj = e as unknown as Record<string, unknown>;
+    let changed = false;
+    const out: Record<string, unknown> = { ...obj };
+    for (const k of Object.keys(out)) {
+      const v = out[k];
+      if (v !== null && typeof v === "object") {
+        if ("kind" in (v as object) && !Array.isArray(v)) {
+          const sub = mapExpr(v as Expr);
+          if (sub !== v) { out[k] = sub; changed = true; }
+        } else if (Array.isArray(v)) {
+          let arrChanged = false;
+          const mapped = v.map((c: unknown) => {
+            if (c !== null && typeof c === "object" && "kind" in (c as object)) {
+              const sub = mapExpr(c as Expr);
+              if (sub !== c) arrChanged = true;
+              return sub;
+            }
+            return c;
+          });
+          if (arrChanged) { out[k] = mapped; changed = true; }
+        }
+      }
+    }
+    return changed ? (out as unknown as Expr) : e;
+  };
+
+  const values = module.values.map((v): ValueDef => {
+    if (v.kind !== "Entry") return v;
+    const newBody = mapStmt(v.entry.body);
+    if (newBody === v.entry.body) return v;
+    return { kind: "Entry", entry: { ...v.entry, body: newBody } };
+  });
+  void seenRecordTypes;
+  return values === module.values ? module : { ...module, values };
+}
 
 function withDerivedOutputs(module: Module, entryName: string, marker: MarkerName): Module {
   const values = module.values.map((v): ValueDef => {
