@@ -37,22 +37,24 @@ export type f32 = number & { readonly [__scalarBrand]?: "f32" };
 // type-checking. On `Number`, plain literals keep working and the method
 // is still callable.
 //
-// TYPE-ONLY — these do NOT exist on `Number.prototype` at runtime. Shader
-// bodies compile to WGSL and never run as JS, so it's safe there; but
-// calling e.g. `(5).mul(2)` in ordinary CPU code WILL throw. Treat the
-// method style as shader-only. (Stopgap; the long-term ergonomic answer
-// is operators via boperators or free-function math.)
+// This declaration is the TYPE side. The matching RUNTIME side lives in
+// `@aardworx/wombat.base` (src/numberMethods.ts), which installs these on
+// `Number.prototype` as a side effect of importing the package — so the
+// methods also WORK in ordinary CPU code wherever wombat.base is loaded
+// (which is everywhere in this stack: shader → base). In shader bodies the
+// frontend lowers them to WGSL operators, so the runtime impl is never
+// even called there. Net: one method-based scalar vocabulary, no plugin.
 declare global {
   interface Number {
-    /** Shader-only: emits `a * b`. Not a real runtime method. */
+    /** Scalar `a * b` (frontend lowers to `*`; runtime impl in wombat.base). */
     mul(o: number): number;
-    /** Shader-only: emits `a + b`. Not a real runtime method. */
+    /** Scalar `a + b` (frontend lowers to `+`; runtime impl in wombat.base). */
     add(o: number): number;
-    /** Shader-only: emits `a - b`. Not a real runtime method. */
+    /** Scalar `a - b` (frontend lowers to `-`; runtime impl in wombat.base). */
     sub(o: number): number;
-    /** Shader-only: emits `a / b`. Not a real runtime method. */
+    /** Scalar `a / b` (frontend lowers to `/`; runtime impl in wombat.base). */
     div(o: number): number;
-    /** Shader-only: emits `-a`. Not a real runtime method. */
+    /** Scalar `-a` (frontend lowers to unary `-`; runtime impl in wombat.base). */
     neg(): number;
   }
 }
