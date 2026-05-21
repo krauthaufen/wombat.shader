@@ -3,8 +3,13 @@
 A TypeScript port of [FShade](https://fshade.org) — write shaders as
 TypeScript functions, get WGSL or GLSL out, with the same IR-level
 optimisation passes (cross-stage I/O elimination, function inlining,
-constant folding, CSE, DCE) and the same composition story (effects
-match outputs to inputs by semantic and fuse at IR level).
+constant folding, CSE, DCE, helper-fusion linking, matrix row/col
+reversal) and the same composition story (effects match outputs to
+inputs by semantic and fuse at IR level).
+
+Status: stable. The TS → WGSL/GLSL compiler and all of its planned
+IR-optimisation phases have shipped. See [`TODO.md`](./TODO.md) for the
+remaining roadmap items.
 
 Part of the Wombat TypeScript port of the Aardvark stack:
 
@@ -73,7 +78,7 @@ stage, no graphics pipeline state).
 | `@aardworx/wombat.shader` | runtime API: `vertex`/`fragment`/`compute` markers, `effect`, `compileShaderSource`, `Effect`/`ComputeShader`/`CompiledEffect`/`ProgramInterface` |
 | `@aardworx/wombat.shader/ir` | IR types (`Module`, `EntryDef`, `Type`, `Expr`, …), visitors, `buildSourceMap` |
 | `@aardworx/wombat.shader/frontend` | TS source → IR walker (`parseShader`) |
-| `@aardworx/wombat.shader/passes` | optimiser passes (DCE / fold / inline / `liftReturns` / cross-stage prune) |
+| `@aardworx/wombat.shader/passes` | optimiser passes (DCE / fold / inline / `liftReturns` / cross-stage prune) plus IR substitution passes (`substituteUniforms` / `substituteAttributes` / `substituteInputs`) |
 | `@aardworx/wombat.shader/glsl` | IR → GLSL ES 3.00 emitter (WebGL2) |
 | `@aardworx/wombat.shader/wgsl` | IR → WGSL emitter (WebGPU) |
 | `@aardworx/wombat.shader/types` | shipped TS declarations for shader source: `V*`/`M*`/sampler types/intrinsics/`ComputeBuiltins` |
@@ -131,7 +136,7 @@ npm test
 npm run build
 ```
 
-182 tests covering IR ↔ WGSL/GLSL round-trips, the inline-marker
+300+ tests covering IR ↔ WGSL/GLSL round-trips, the inline-marker
 plugin pipeline, and the optimiser passes.
 
 ## License

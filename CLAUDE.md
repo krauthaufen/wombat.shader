@@ -3,8 +3,17 @@
 TypeScript port of FShade. Write shaders as TS arrow functions, get
 WGSL/GLSL out via the same IR-level optimiser passes as the F#
 original. Two published packages: `@aardworx/wombat.shader` (the
-runtime + IR + frontend + emitters + types, all in one tree) and
-`@aardworx/wombat.shader-vite` (the build-time inline-marker plugin).
+runtime + IR + frontend + emitters + types, all in one tree, currently
+`0.5.9`) and `@aardworx/wombat.shader-vite` (the build-time
+inline-marker plugin, currently `0.3.4`).
+
+Status: stable — TS → WGSL/GLSL compiler with full IR optimisation
+(inlining, cross-stage I/O elimination, const-fold, CSE, DCE,
+helper-fusion linker, matrix row/col reversal). All planned phases
+shipped. Remaining roadmap lives in `TODO.md` (the old 12-phase
+`plan.md` was folded into it); cross-repo status in
+`~/claude/wombat-todo.md`. Reference docs: `docs/INTRINSICS.md`,
+`docs/IR.md`.
 
 ## Repository layout
 
@@ -36,7 +45,7 @@ subdir.
 
 ## Tooling
 
-- `npm test` — vitest, 182 tests covering IR↔WGSL/GLSL round-trips,
+- `npm test` — vitest, 300+ tests covering IR↔WGSL/GLSL round-trips,
   inline-marker plugin pipeline, optimiser passes.
 - `npm run typecheck` — `tsc -b --noEmit`.
 - `npm run build` — emits `dist/` per package via `tsc -b`.
@@ -60,8 +69,10 @@ TS source ──► parseShader ──► IR Module ──► passes ──► e
 - **passes**: `liftReturns` (bare-value → WriteOutput), `inline`,
   `reduceUniforms`, `cse`, `foldConstants`, `dce`, `composeStages`
   (v+v / f+f fuse), `pruneCrossStage`, `inferStorageAccess`,
-  `legaliseTypes`, `reverseMatrixOps`, `resolveHoles` (closure-hole
-  specialisation).
+  `legaliseTypes`, `reverseMatrixOps`, `linkHelpers` (helper-fusion),
+  `resolveHoles` (closure-hole specialisation). IR substitution passes
+  (`substituteUniforms` / `substituteAttributes` / `substituteInputs`)
+  also live here and ship via the `./passes` subpath.
 - **emitters**: WGSL emits per-segment source maps (per-Expr
   granularity for assignments + expression statements). GLSL emits
   line-granular maps. Both produce a `bindings` summary
