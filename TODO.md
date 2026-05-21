@@ -8,12 +8,12 @@ Reference docs kept: `docs/INTRINSICS.md`, `docs/IR.md`.
 
 ## Open
 
-- **Synthetic decoder-stage prepend** — the IR substitution passes
-  (`substituteUniforms` / `substituteAttributes` / `substituteInputs`) already
-  exist and ship via the `./passes` subpath. What's still missing for
-  wombat.rendering's heap rewriter is a public way to prepend/compose a synthetic
-  decoder vertex stage (central TODO #1–2). Also re-export the substitution
-  passes from the root entry, not just `./passes`.
+- **Re-export substitution passes from the root entry** (minor nicety) — the IR
+  substitution passes (`substituteUniforms` / `substituteAttributes` /
+  `substituteInputs`) already ship via the `./passes` subpath and are used by
+  wombat.rendering's heap rewriter; the decoder VS is composed with `effect()` +
+  `composeStages` (no new shader API was needed). Just re-export the passes from
+  the root entry too for discoverability.
 - **`NewStruct` IR node** — construct struct values in the IR. Unblocks
   wombat.fable storage-buffer record writeback + `arrayLength` (central TODO #4).
 - **Intrinsic ergonomics** (low priority) — (a) a ships-with-package
