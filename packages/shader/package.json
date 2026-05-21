@@ -1,6 +1,6 @@
 {
   "name": "@aardworx/wombat.shader",
-  "version": "0.5.9",
+  "version": "0.6.0",
   "description": "wombat.shader: TypeScript shader source → WGSL/GLSL with optimisation passes, named-binding ProgramInterface, and runtime Effect/ComputeShader composition.",
   "license": "MIT",
   "type": "module",
@@ -55,7 +55,7 @@
     "src"
   ],
   "dependencies": {
-    "@aardworx/wombat.base": "^0.4.2"
+    "@aardworx/wombat.base": "^0.5.0"
   },
   "publishConfig": {
     "access": "public"
