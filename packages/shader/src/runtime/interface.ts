@@ -131,6 +131,9 @@ export interface SamplerInfo {
   readonly group: number;
   readonly slot: number;
   readonly type: Type;
+  /** Shader-defined sampler state (filter/address) from the IR; the renderer
+   *  builds the GPUSamplerDescriptor from it. Absent → default sampler. */
+  readonly state?: { readonly filter: string; readonly addressU: string; readonly addressV: string } | undefined;
 }
 
 export interface TextureInfo {
@@ -402,6 +405,7 @@ function collectSamplersAndTextures(
       group: 0,
       slot: slotCounter.next++,
       type: v.type,
+      state: (v as { state?: SamplerInfo["state"] }).state,
     };
     if (v.type.kind === "Texture") textures.push(entry);
     else samplers.push(entry);

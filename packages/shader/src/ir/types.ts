@@ -438,7 +438,18 @@ export type ValueDef =
       readonly binding: BindingPoint;
       readonly name: string;
       readonly type: Type;
+      /** Shader-defined sampler state (from `sampler2d { filter …; addressU … }`).
+       *  Names mirror FShade's Filter/WrapMode cases; the runtime maps them to a
+       *  GPUSamplerDescriptor. Absent → default sampler. */
+      readonly state?: SamplerState;
     };
+
+/** Shader-defined sampler state recovered from the sampler builder. */
+export interface SamplerState {
+  readonly filter: string;
+  readonly addressU: string;
+  readonly addressV: string;
+}
 
 export type TypeDef =
   | { readonly kind: "Struct"; readonly name: string; readonly fields: readonly StructField[] };
