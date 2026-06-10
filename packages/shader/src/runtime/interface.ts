@@ -131,9 +131,10 @@ export interface SamplerInfo {
   readonly group: number;
   readonly slot: number;
   readonly type: Type;
-  /** Shader-defined sampler state (filter/address) from the IR; the renderer
-   *  builds the GPUSamplerDescriptor from it. Absent → default sampler. */
-  readonly state?: { readonly filter: string; readonly addressU: string; readonly addressV: string } | undefined;
+  /** Shader-defined sampler state (filter/address/lod/anisotropy) from the
+   *  IR; the renderer builds the GPUSamplerDescriptor from it. Absent →
+   *  default sampler. */
+  readonly state?: import("../ir/types.js").SamplerState | undefined;
 }
 
 export interface TextureInfo {

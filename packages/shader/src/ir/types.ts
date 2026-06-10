@@ -449,6 +449,17 @@ export interface SamplerState {
   readonly filter: string;
   readonly addressU: string;
   readonly addressV: string;
+  /** FShade WrapMode case name; only meaningful for 3D samplers. */
+  readonly addressW?: string;
+  /** FShade ComparisonFunction case name. Carried for forward-compat —
+   *  comparison sampling needs a `sampler_comparison` binding, which the
+   *  web runtime does not synthesise yet. */
+  readonly comparison?: string;
+  readonly maxAnisotropy?: number;
+  readonly minLod?: number;
+  readonly maxLod?: number;
+  /** No WebGPU sampler counterpart (GL-era LOD bias); carried for parity. */
+  readonly mipLodBias?: number;
 }
 
 export type TypeDef =
