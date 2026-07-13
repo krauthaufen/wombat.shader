@@ -1,10 +1,10 @@
 // Effect compile cache. Cache key = effect.id + target (+ skipOpt +
-// fragment-output-layout). Same key on a second `compile()` returns
-// the *same* `CompiledEffect` reference (no re-emit). The sampled
-// closure-hole values are NOT part of the key — for a given effect id
-// the holes are assumed invariant (they're module-level-const captures
-// in every realistic effect), so two compiles of the same id share a
-// result regardless of what the hole getters return between them.
+// fragment-output-layout + instance attrs) + the sampled closure-hole
+// values. Same key on a second `compile()` returns the *same*
+// `CompiledEffect` reference (no re-emit). Hole values ARE part of the
+// key: they're specialised into the emitted source as literals, so a
+// changed capture must produce a fresh compile rather than stale
+// source.
 
 import { describe, expect, it } from "vitest";
 import { effect, stage } from "@aardworx/wombat.shader";
@@ -58,16 +58,20 @@ describe("Effect compile cache", () => {
     expect(a).toBe(b);
   });
 
-  it("hole-getter values are NOT part of the key — same id ⇒ same result", () => {
-    // The compile cache is keyed on the effect id, not the sampled
-    // holes; once compiled, mutating what a hole getter returns does
-    // not change the cached `CompiledEffect`.
+  it("hole-getter values ARE part of the key — changed holes ⇒ fresh compile", () => {
+    // Holes are inlined as constants, so mutating what a getter returns
+    // must miss the cache and re-emit; restoring the original values
+    // hits the original cache entry again.
     const ref = { tint: [0.1, 0.2, 0.3] as [number, number, number] };
     const fx = effect(stage(fragmentTemplate(), { tint: () => ref.tint }, freshId()));
     const a = fx.compile({ target: "wgsl" });
     ref.tint = [0.4, 0.5, 0.6];
     const b = fx.compile({ target: "wgsl" });
-    expect(b).toBe(a);
+    expect(b).not.toBe(a);
+    expect(b.stages[0]!.source).toMatch(/0\.4/);
+    ref.tint = [0.1, 0.2, 0.3];
+    const c = fx.compile({ target: "wgsl" });
+    expect(c).toBe(a);
   });
 
   it("different target → distinct cache entries", () => {

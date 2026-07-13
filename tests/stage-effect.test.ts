@@ -62,21 +62,21 @@ describe("stage / effect", () => {
     expect(wgsl).toMatch(/0\.3/);
   });
 
-  it("compile is cached by effect id — re-sampling getters does not re-emit", () => {
-    // Holes are inlined as IR constants at the first compile; the
-    // cache key is the effect id (not the hole values), so a later
-    // compile returns the same `CompiledEffect` even if the getter
-    // would now return something different.
+  it("compile is cached by effect id + hole values — re-sampling picks up changes", () => {
+    // Holes are inlined as IR constants at compile time and are part of
+    // the cache key: an unchanged getter hits the cache (same reference),
+    // a changed one re-emits with the new constants.
     const ref = { tint: [1.0, 0.0, 0.0] as [number, number, number] };
     const fx = effect(stage(fragmentTemplate(), { tint: () => ref.tint }, freshId()));
 
     const a = fx.compile({ target: "wgsl" });
     expect(a.stages[0]!.source).toMatch(/1\.0/);
+    expect(fx.compile({ target: "wgsl" })).toBe(a); // unchanged holes → cache hit
 
     ref.tint = [0.0, 1.0, 0.0];
     const b = fx.compile({ target: "wgsl" });
-    expect(b).toBe(a);
-    expect(b.stages[0]!.source).toMatch(/1\.0/);
+    expect(b).not.toBe(a);
+    expect(b.stages[0]!.source).toMatch(/0\.0f?,\s*1\.0f?,\s*0\.0f?/);
   });
 
   it("missing hole getter throws at compile time", () => {
