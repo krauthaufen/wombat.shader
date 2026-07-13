@@ -634,8 +634,22 @@ export function expr(e: Expr): string {
     case "MatrixFromCols":
       return `${typeStr(e.type)}(${e.cols.map(expr).join(", ")})`;
     case "ConvertMatrix":
-    case "Convert":
+    case "Convert": {
+      // Exact-fold integer-valued float CONSTANTS converted to int types.
+      // Closure holes arrive as f64 numbers and would otherwise print as
+      // f32 literals wrapped in a conversion — `u32(4294967295.0f)` — where
+      // the f32 literal rounds to 2^32 and the (out-of-range) conversion is
+      // implementation-defined. The double still holds the exact integer,
+      // so emit it as an integer literal directly.
+      if (e.kind === "Convert" && e.type.kind === "Int" && e.value.kind === "Const" && e.value.value.kind === "Float") {
+        const v = e.value.value.value;
+        if (Number.isInteger(v)) {
+          if (!e.type.signed && v >= 0 && v <= 0xffffffff) return `${v}u`;
+          if (e.type.signed && v >= -(2 ** 31) && v <= 2 ** 31 - 1) return `${v}`;
+        }
+      }
       return `${typeStr(e.type)}(${expr(e.value)})`;
+    }
     case "VecAny":
       return `any(${expr(e.value)})`;
     case "VecAll":
