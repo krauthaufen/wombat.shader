@@ -236,6 +236,21 @@ export interface Effect {
  *   - `avalHoles` — aval-bound uniforms preserved on the Effect for
  *                   the future rendering backend.
  */
+/**
+ * Fingerprint of an effect's CURRENT closure-hole values — `""` when it has
+ * none. Cheap: one getter call per hole, no codegen.
+ *
+ * `Effect.id` hashes the effect TEMPLATE, so it does not move when a hole
+ * getter starts returning something else at runtime — yet hole values are
+ * specialised into the emitted source as literals, so they change the program.
+ * Any downstream cache keyed on `id` (a pipeline cache, a persisted shader
+ * cache) must therefore pair it with this, or risk serving a shader built from
+ * a stale capture.
+ */
+export function effectHoleKey(effect: Effect): string {
+  return holesKey(sampleStageHoles(effect.stages));
+}
+
 export function stage(
   template: Module,
   holes: HoleGetters = {},
