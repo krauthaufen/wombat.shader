@@ -29,6 +29,7 @@ import {
   instanceUniforms,
   liftReturns,
   assignLocations,
+  compactLocations,
   linkCrossStage,
   linkFragmentOutputs,
   pruneCrossStage,
@@ -253,6 +254,13 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
     // referencing inputs we want to drop, and the prune sees
     // their `ReadInput` calls as live.
     m = pruneVertexInputs(m);
+    // Now that the surviving interstage varyings are final, compact
+    // their Location numbers densely. pruneCrossStage keeps VS-output /
+    // FS-input in lockstep by name but leaves the pre-prune numbers, so
+    // a live varying can sit past WebGPU's 16-location cap even though
+    // only a handful cross the stage boundary. Must run after the last
+    // prune and before emit.
+    m = compactLocations(m);
     m = reduceUniforms(m);
   }
   // Storage-buffer inference must run after the optimiser passes (which
