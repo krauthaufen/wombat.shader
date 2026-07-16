@@ -554,6 +554,11 @@ export function expr(e: Expr): string {
           `Atomics require WGSL/WebGPU or GLSL ES 3.10+.`,
         );
       }
+      // GLSL textureSize is (sampler, lod) — the frontend call carries no
+      // lod (base level implied, matching WGSL textureDimensions' default).
+      if (e.op.emit.glsl === "textureSize" && e.args.length === 1) {
+        return `textureSize(${expr(e.args[0]!)}, 0)`;
+      }
       return `${e.op.emit.glsl}(${e.args.map(expr).join(", ")})`;
     case "Conditional":
       return `((${expr(e.cond)}) ? (${expr(e.ifTrue)}) : (${expr(e.ifFalse)}))`;

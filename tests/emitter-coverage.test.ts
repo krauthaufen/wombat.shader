@@ -300,6 +300,54 @@ describe("samplers", () => {
     expect(wgsl).toContain("@group(0) @binding(0) var u_tex: sampler;");
     expect(wgsl).toContain("@group(0) @binding(1) var u_tex_view: texture_2d<f32>;");
   });
+
+  it("textureSize lowers to textureDimensions (WGSL) / textureSize(s, 0) (GLSL)", () => {
+    // WGSL has no `textureSize`; it must emit `textureDimensions(view)` —
+    // texture only, the legalised (view, sampler) pair loses the sampler —
+    // converted to the ivec2 the IR type promises. GLSL keeps the combined
+    // sampler but requires the mandatory lod argument.
+    const TextureSizeIntrinsic = {
+      name: "textureSize", pure: true,
+      emit: { glsl: "textureSize", wgsl: "textureSize" },
+      returnTypeOf: () => Vec(Ti32, 2),
+      samplerBinding: true,
+    };
+    const samplerType: Type = { kind: "Sampler", target: "2D", sampled: { kind: "Float" }, comparison: false };
+    const textureType: Type = { kind: "Texture", target: "2D", sampled: { kind: "Float" }, arrayed: false, multisampled: false };
+    const bodyWith = (args: Expr[]): Stmt => ({
+      kind: "Sequential", body: [
+        { kind: "Declare", var: { name: "ts", type: Vec(Ti32, 2), mutable: false },
+          init: { kind: "Expr", value: { kind: "CallIntrinsic", op: TextureSizeIntrinsic, args, type: Vec(Ti32, 2) } } },
+        { kind: "WriteOutput", name: "outColor", value: { kind: "Expr", value: {
+          kind: "NewVector", components: [constF(0), constF(0), constF(0), constF(1)], type: Tvec4f } } },
+      ],
+    });
+    // WGSL shape: post-legalise (view, sampler)
+    const wgslMod: Module = {
+      types: [], values: [
+        { kind: "Sampler", binding: { group: 0, slot: 0 }, name: "u_tex", type: samplerType },
+        { kind: "Sampler", binding: { group: 0, slot: 1 }, name: "u_tex_view", type: textureType },
+        { kind: "Entry", entry: frag(bodyWith([
+          { kind: "ReadInput", scope: "Uniform", name: "u_tex_view", type: textureType },
+          { kind: "ReadInput", scope: "Uniform", name: "u_tex", type: samplerType },
+        ])) },
+      ],
+    };
+    const wgsl2 = emitWgsl(wgslMod).source;
+    expect(wgsl2).toContain("vec2<i32>(textureDimensions(u_tex_view))");
+    expect(wgsl2).not.toContain("textureSize(");
+    // GLSL shape: pre-legalise combined sampler, single arg
+    const glslMod: Module = {
+      types: [], values: [
+        { kind: "Sampler", binding: { group: 0, slot: 0 }, name: "u_tex", type: samplerType },
+        { kind: "Entry", entry: frag(bodyWith([
+          { kind: "ReadInput", scope: "Uniform", name: "u_tex", type: samplerType },
+        ])) },
+      ],
+    };
+    const glsl2 = emitGlsl(glslMod).source;
+    expect(glsl2).toContain("textureSize(u_tex, 0)");
+  });
 });
 
 // ─── compute stage ───────────────────────────────────────────────────

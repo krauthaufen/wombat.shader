@@ -889,6 +889,19 @@ export function expr(e: Expr): string {
         const rest = e.args.slice(1).map(expr);
         return `${e.op.emit.wgsl}(&${first}${rest.length ? ", " + rest.join(", ") : ""})`;
       }
+      // textureSize has no WGSL equivalent by that name: it lowers to
+      // textureDimensions(texture) — texture only (post-legaliseTypes the
+      // args are (view, sampler); drop the sampler, and any GLSL lod arg).
+      // textureDimensions returns vec2<u32>, the IR type is ivec2 — convert.
+      if (e.op.emit.wgsl === "textureSize" && e.args.length > 0) {
+        const dims = `textureDimensions(${expr(e.args[0]!)})`;
+        const t = e.type;
+        if (t.kind === "Vector" && t.element.kind === "Int" && t.element.signed) {
+          return `vec${t.dim}<i32>(${dims})`;
+        }
+        if (t.kind === "Int" && t.signed) return `i32(${dims})`;
+        return dims;
+      }
       return `${e.op.emit.wgsl}(${e.args.map(expr).join(", ")})`;
     }
     case "Conditional":
