@@ -24,6 +24,7 @@
 //    `var` for IR `Declare` since the IR doesn't distinguish let/var
 //    explicitly; passes can lower to `let` later for read-only locals.
 
+import { visitStmt } from "../ir/visit.js";
 import type {
   EntryDef,
   EntryParameter,
@@ -160,11 +161,14 @@ export function emitWgsl(module: Module, entryName?: string): EmitResult {
     }
   }
 
-  // Type definitions.
-  for (const t of module.types) {
-    if (t.kind === "Struct") emitStructDecl(ctx, t);
-  }
-  if (module.types.length > 0) w.blank();
+  // Type definitions: the module's TypeDefs plus every user struct
+  // reachable from its values (bindings, constants, function signatures,
+  // locals). `stage()` / `computeShader()` rebuild modules with
+  // `types: []`, so structs used by storage buffers or helper functions
+  // must be recovered from the types themselves. Nested structs first.
+  const structs = collectStructs(module);
+  for (const t of structs) emitStructDecl(ctx, t);
+  if (structs.length > 0) w.blank();
 
   // Module-level decls: uniforms first, then samplers, then storage
   // buffers. All on @group(0) with a single continuous binding-slot
@@ -203,12 +207,25 @@ export function emitWgsl(module: Module, entryName?: string): EmitResult {
     }
   }
 
+  // Module-scope constants (`const NAME: T = …;`). A composed module can
+  // carry the same constant from several stages — emit each name once.
+  const constants = new Set<string>();
+  for (const v of module.values) {
+    if (v.kind !== "Constant" || constants.has(v.name)) continue;
+    constants.add(v.name);
+    w.line(`const ${safeName(v.name)}: ${typeStr(v.varType)} = ${rexpr(v.init)};`);
+  }
+  if (constants.size > 0) w.blank();
+
   // Synthetic input/output structs for the chosen entry.
   const ioInfo = emitEntryStructs(ctx, entry);
 
-  // User functions.
+  // User functions (once per name, see constants).
+  const functions = new Set<string>();
   for (const v of module.values) {
-    if (v.kind === "Function") emitFunction(ctx, v.signature, v.body, v.attributes);
+    if (v.kind !== "Function" || functions.has(v.signature.name)) continue;
+    functions.add(v.signature.name);
+    emitFunction(ctx, v.signature, v.body, v.attributes);
   }
 
   // Stage entry function.
@@ -397,7 +414,57 @@ class Writer {
   toString(): string { return this.parts.join(""); }
 }
 
-function emitStructDecl(ctx: Ctx, t: { kind: "Struct"; name: string; fields: readonly { type: Type; name: string }[] }): void {
+type StructDef = { kind: "Struct"; name: string; fields: readonly { type: Type; name: string }[] };
+
+/** Struct types used anywhere in the module, dependencies first. */
+function collectStructs(module: Module): StructDef[] {
+  const out: StructDef[] = [];
+  const seen = new Set<string>();
+  const visitType = (t: Type): void => {
+    switch (t.kind) {
+      case "Struct":
+        if (seen.has(t.name)) return;
+        seen.add(t.name);
+        for (const f of t.fields) visitType(f.type);
+        out.push({ kind: "Struct", name: t.name, fields: t.fields });
+        return;
+      case "Array":
+      case "Vector":
+      case "Matrix":
+        visitType(t.element);
+        return;
+      default:
+        return;
+    }
+  };
+  for (const t of module.types) if (t.kind === "Struct") visitType({ kind: "Struct", name: t.name, fields: t.fields });
+  const visitExpr = (e: Expr): void => { visitType(e.type); };
+  const visitStmtTypes = (s: Stmt): void => {
+    visitStmt(s, {
+      expr: { pre: visitExpr },
+      preStmt(c) { if (c.kind === "Declare") visitType(c.var.type); },
+    });
+  };
+  for (const v of module.values) {
+    switch (v.kind) {
+      case "StorageBuffer": visitType(v.layout); break;
+      case "Uniform": for (const u of v.uniforms) visitType(u.type); break;
+      case "Constant": visitType(v.varType); break;
+      case "Function":
+        visitType(v.signature.returnType);
+        for (const p of v.signature.parameters) visitType(p.type);
+        visitStmtTypes(v.body);
+        break;
+      case "Entry":
+        visitStmtTypes(v.entry.body);
+        break;
+      default: break;
+    }
+  }
+  return out;
+}
+
+function emitStructDecl(ctx: Ctx, t: StructDef): void {
   if (ctx.structs.has(t.name)) return;
   ctx.structs.add(t.name);
   ctx.out.line(`struct ${t.name} {`);

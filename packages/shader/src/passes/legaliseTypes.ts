@@ -193,6 +193,11 @@ function splitWgslSamplers(module: Module): Module {
       kind: "ReadInput", scope: "Uniform", name: `${samplerName}_view`,
       type: textureType,
     };
+    // Texel loads and size queries address the texture alone:
+    // textureLoad(view, coord, level), textureDimensions(view).
+    if (e.op.emit.wgsl === "textureLoad" || e.op.emit.wgsl === "textureSize") {
+      return { ...e, args: [textureExpr, ...e.args.slice(1)] };
+    }
     // textureSample(view, sampler, ...rest)
     return { ...e, args: [textureExpr, first, ...e.args.slice(1)] };
   };
