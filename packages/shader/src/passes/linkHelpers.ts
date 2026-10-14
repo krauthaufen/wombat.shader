@@ -333,12 +333,15 @@ function propagateHelperReads(body: Stmt, live: Set<string>): void {
         // (including helper-call Writes whose RHS we DON'T walk
         // because they reference Var(state)). Wrappers don't have
         // helper-call Writes inside helpers, so this case is rare.
+        const local = localRoot(s.target);
         const lname = lFieldName(s.target);
-        if (lname === undefined) {
-          // Probably a write to a local var. Walk RHS to find
-          // dependencies, mark target var as live so its Declare's
-          // init gets walked in phase 2.
-          if (s.target.kind === "LVar") liveVars.add(s.target.var);
+        if (local !== undefined || lname === undefined) {
+          // A write to a local var, or into a field / element of one
+          // (`i.mp = in.mp` building a struct value). Walk RHS and
+          // index expressions to find dependencies, mark the var live
+          // so its Declare's init gets walked in phase 2.
+          if (local !== undefined) liveVars.add(local);
+          visitLExprIndices(s.target, visitExpr);
           visitExpr(s.value);
         } else if (live.has(lname)) {
           visitExpr(s.value);
@@ -428,6 +431,30 @@ function propagateHelperReads(body: Stmt, live: Set<string>): void {
       visitExpr(d.init);
       if (liveVars.size + live.size > before) changed = true;
     }
+  }
+}
+
+/** The local Var a write lands in (through fields / items / swizzles), if any. */
+function localRoot(l: import("../ir/index.js").LExpr): { readonly name: string } | undefined {
+  switch (l.kind) {
+    case "LVar": return l.var;
+    case "LField":
+    case "LItem":
+    case "LSwizzle": return localRoot(l.target);
+    case "LMatrixElement": return localRoot(l.matrix);
+    default: return undefined;
+  }
+}
+
+/** Visit the index expressions inside an lvalue path. */
+function visitLExprIndices(l: import("../ir/index.js").LExpr, visit: (e: Expr) => void): void {
+  switch (l.kind) {
+    case "LField":
+    case "LSwizzle": visitLExprIndices(l.target, visit); return;
+    case "LItem": visit(l.index); visitLExprIndices(l.target, visit); return;
+    case "LMatrixElement": visit(l.row); visit(l.col); visitLExprIndices(l.matrix, visit); return;
+    case "LInput": if (l.index) visit(l.index); return;
+    default: return;
   }
 }
 
