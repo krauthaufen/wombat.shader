@@ -172,7 +172,29 @@ export function compileShaderSource(
   return compileModule(merged, options);
 }
 
+/**
+ * Composed effects concatenate their stages' module values, so a storage
+ * buffer, sampler, constant or helper function used by several stages
+ * appears once per stage. Keep the first declaration of each name — the
+ * emitter and the interface builder number bindings from the same list.
+ */
+function dedupeDeclarations(module: Module): Module {
+  const seen = new Set<string>();
+  const values = module.values.filter((v) => {
+    const key =
+      v.kind === "StorageBuffer" || v.kind === "Sampler" || v.kind === "Constant" ? `${v.kind}:${v.name}`
+      : v.kind === "Function" ? `Function:${v.signature.name}`
+      : undefined;
+    if (key === undefined) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return values.length === module.values.length ? module : { ...module, values };
+}
+
 export function compileModule(module: Module, options: CompileOptions): CompiledEffect {
+  module = dedupeDeclarations(module);
   // liftReturns runs first so the rest of the pipeline sees explicit
   // WriteOutput statements. The carrier annotation that liftReturns
   // matches on is non-enumerable; spread-clones in later passes would

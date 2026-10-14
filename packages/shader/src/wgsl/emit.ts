@@ -1150,8 +1150,10 @@ function formatFloat(n: number): string {
     return n === Infinity ? "(1.0/0.0)" : n === -Infinity ? "(-1.0/0.0)" : "(0.0/0.0)";
   }
   // WGSL needs `f` suffix for f32 literals to disambiguate from abstract floats.
-  if (Number.isInteger(n)) return `${n}.0f`;
-  return `${n}f`;
+  // Large integral values print in exponent form (`1e+30`), which takes
+  // no `.0`.
+  const s = `${n}`;
+  return /[.eE]/.test(s) ? `${s}f` : `${s}.0f`;
 }
 
 // ─────────────────────────────────────────────────────────────────────

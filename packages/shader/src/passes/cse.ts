@@ -70,6 +70,10 @@ function liftBlock(body: readonly Stmt[]): readonly Stmt[] {
   const counts = new Map<string, { expr: Expr; count: number }>();
   const seen = (e: Expr): void => {
     if (!isPure(e)) return;
+    // A read of a mutable variable is not a value: the variable may be
+    // written between (or, in a loop, around) the occurrences, so lifting
+    // it to the first use would read a stale value.
+    if (readsMutable(e)) return;
     if (sizeOf(e) < MIN_NODES_FOR_CSE) return;
     const k = hash(e);
     const prev = counts.get(k);
@@ -155,6 +159,17 @@ function liftBlock(body: readonly Stmt[]): readonly Stmt[] {
   return out;
 }
 
+function readsMutable(e: Expr): boolean {
+  let found = false;
+  const walk = (x: Expr): void => {
+    if (found) return;
+    if (x.kind === "Var" && x.var.mutable) { found = true; return; }
+    _mapExprChildren(x, (c) => { walk(c); return c; });
+  };
+  walk(e);
+  return found;
+}
+
 function replaceExprWith(e: Expr, allocated: Map<string, Var>): Expr {
   const fn = (x: Expr): Expr => {
     const k = hashIfPure(x);
@@ -192,7 +207,7 @@ function mapExprChildrenLocal(e: Expr, fn: (c: Expr) => Expr): Expr {
 // ─────────────────────────────────────────────────────────────────────
 
 function hashIfPure(e: Expr): string | undefined {
-  return isPure(e) ? hash(e) : undefined;
+  return isPure(e) && !readsMutable(e) ? hash(e) : undefined;
 }
 
 /**

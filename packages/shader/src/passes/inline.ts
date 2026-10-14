@@ -145,16 +145,19 @@ function copyPropStmt(s: Stmt): Stmt {
   return { ...s, body: out };
 }
 
+// A read of a mutable variable is not copyable: `let t = x; x = y; y = t;`
+// must keep `t`.
 function isTriviallyCopyable(e: Expr): boolean {
   switch (e.kind) {
     case "Var":
+      return !e.var.mutable;
     case "Const":
     case "ReadInput":
       return true;
     case "VecSwizzle":
-      return e.value.kind === "Var" || e.value.kind === "ReadInput";
+      return (e.value.kind === "Var" && !e.value.var.mutable) || e.value.kind === "ReadInput";
     case "Field":
-      return e.target.kind === "Var" || e.target.kind === "ReadInput";
+      return (e.target.kind === "Var" && !e.target.var.mutable) || e.target.kind === "ReadInput";
     default:
       return false;
   }
