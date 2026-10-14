@@ -692,9 +692,16 @@ function emitEntryFunction(ctx: Ctx, e: EntryDef, io: EntryIO): void {
   // body's `ReadInput("Builtin", semantic)` reads (which the emitter
   // lowers as the bare semantic name) line up. This mirrors how the
   // compute-stage builtin args are emitted further down.
+  // Composed stages can each declare the same builtin under their own
+  // name (a user fragment's `pos` and the pick chain's `fragCoord`); the
+  // reads all lower to the semantic, so one parameter serves them all.
+  const builtins = new Set<string>();
   for (const p of e.inputs) {
     const b = builtinName(p);
-    if (b) params.push(`@builtin(${b}) ${b}: ${typeStr(p.type)}`);
+    if (b && !builtins.has(b)) {
+      builtins.add(b);
+      params.push(`@builtin(${b}) ${b}: ${typeStr(p.type)}`);
+    }
   }
   // Compute stage's `arguments` array carries workgroup-style builtins
   // as well. The body's `ReadInput("Builtin", semantic)` references the
