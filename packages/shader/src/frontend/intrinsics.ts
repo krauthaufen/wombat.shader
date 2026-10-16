@@ -50,6 +50,11 @@ const SAMPLER_BIND = (name: string): IntrinsicRef => ({
     glsl: name,
     wgsl: name === "texture" ? "textureSample"
         : name === "texelFetch" ? "textureLoad"
+        // GLSL's explicit-LOD sample is `textureSampleLevel` in WGSL. Without
+        // this the name went out verbatim and the module failed to compile —
+        // which is the only way to sample inside non-uniform control flow (a
+        // ray-march loop), where implicit derivatives are illegal.
+        : name === "textureLod" ? "textureSampleLevel"
         : name,
   },
   returnTypeOf: vec4Result,
