@@ -10,7 +10,7 @@
     "examples/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "node scripts/sync-version.mjs && tsc -b",
     "clean": "tsc -b --clean && rimraf packages/*/dist",
     "test": "vitest run",
     "test:watch": "vitest",

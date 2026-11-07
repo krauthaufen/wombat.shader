@@ -17,3 +17,4 @@
 //   import { ... } from "@aardworx/wombat.shader/webgl2";   // WebGL2 program linking
 
 export * from "./runtime/index.js";
+export { VERSION } from "./version.js";
