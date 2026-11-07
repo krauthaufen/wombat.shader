@@ -78,6 +78,9 @@ describe("fusion: builtin outputs are one port per builtin", () => {
     const fs = r.stages.find((s) => s.stage === "fragment")!;
     // Depth is not a varying: fsB reads fsA's write
     expect(fs.bindings.inputs).toHaveLength(0);
+    // and it stays the fragment's depth although fsB read it
+    expect(fs.source).toMatch(/@builtin\(frag_depth\)/);
+    expect(fs.source).toMatch(/0\.25/);
   });
 
   it("fragment stages writing gl_FragDepth and Depth fuse into one frag_depth output", () => {

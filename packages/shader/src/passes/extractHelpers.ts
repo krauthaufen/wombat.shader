@@ -299,7 +299,11 @@ export function extractFusedEntry(
           break;
         }
       }
-      if (consumedAfter) continue; // demote to carrier
+      // A builtin output (position, frag_depth, sample_mask) is the
+      // stage's result, not a varying: a later stage reading it (a pick
+      // final reading `Depth`) does not make it a carrier.
+      const isBuiltinOut = (p.decorations ?? []).some((d) => d.kind === "Builtin");
+      if (consumedAfter && !isBuiltinOut) continue; // demote to carrier
       if (seenOut.has(p.name)) continue;
       seenOut.add(p.name);
       wrapperOutputs.push(p);
