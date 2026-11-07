@@ -79,4 +79,32 @@ describe("fusion: builtin outputs are one port per builtin", () => {
     // Depth is not a varying: fsB reads fsA's write
     expect(fs.bindings.inputs).toHaveLength(0);
   });
+
+  it("fragment stages writing gl_FragDepth and Depth fuse into one frag_depth output", () => {
+    const source = `
+      function vsMain(input: { Positions: V4f }): { gl_Position: V4f } {
+        return { gl_Position: input.Positions };
+      }
+      function fsA(input: {}): { outColor: V4f; gl_FragDepth: f32 } {
+        return { outColor: new V4f(1.0, 1.0, 1.0, 1.0), gl_FragDepth: 0.25 };
+      }
+      function fsB(input: {}): { Depth: f32 } {
+        return { Depth: 0.5 };
+      }
+    `;
+    const r = compileShaderSource(source, [
+      vsOf("vsMain", "gl_Position"),
+      { name: "fsA", stage: "fragment",
+        inputs: [],
+        outputs: [
+          { name: "outColor", type: Tvec4f, semantic: "Colors", decorations: [{ kind: "Location", value: 0 }] },
+          { name: "gl_FragDepth", type: Tf, semantic: "Depth", decorations: [{ kind: "Builtin", value: "frag_depth" }] },
+        ] },
+      { name: "fsB", stage: "fragment",
+        inputs: [],
+        outputs: [{ name: "Depth", type: Tf, semantic: "Depth", decorations: [{ kind: "Builtin", value: "frag_depth" }] }] },
+    ], { target: "wgsl" });
+    const fs = r.stages.find((s) => s.stage === "fragment")!;
+    expect(fs.source.match(/@builtin\(frag_depth\)/g)?.length).toBe(1);
+  });
 });
