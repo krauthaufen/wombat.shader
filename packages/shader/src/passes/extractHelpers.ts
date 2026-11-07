@@ -131,7 +131,7 @@ export function extractFusedEntry(
   // EntryParameter and in every body Read/Write referring to them).
   // Ports with empty semantic stay name-keyed (paramKey falls back
   // to name).
-  const operands = canonicaliseBySemantic(operandsRaw);
+  const operands = canonicaliseBySemantic(canonicaliseBuiltinOutputs(operandsRaw));
   const stage = operands[0]!.stage;
 
   // Merged ports: every input + every output across all operands,
@@ -478,6 +478,69 @@ function renumberLocations(params: readonly EntryParameter[]): EntryParameter[] 
 }
 
 /**
+ * Builtin outputs are one port per builtin, whatever their spelling, and a
+ * later stage reads them under their FShade semantic:
+ *
+ *  - vertex: every `@builtin(position)` output (`gl_Position`, `position`,
+ *    `Positions`, …) is renamed `gl_Position`; an operand AFTER the first
+ *    position writer that reads input `Positions` reads that write (FShade:
+ *    a composed stage's `Positions` is the earlier stage's output, not the
+ *    attribute). Operands before it still read the attribute.
+ *  - fragment: every `@builtin(frag_depth)` output (`gl_FragDepth`,
+ *    `frag_depth`, `Depth`, …) is renamed `Depth`, so a later `Depth`
+ *    input reads it.
+ *
+ * Without this, two spellings fuse into two `@builtin(position)` outputs
+ * (rejected by WGSL), and a `Positions` reader after the transform reads
+ * the raw attribute.
+ */
+function canonicaliseBuiltinOutputs(operands: readonly EntryDef[]): readonly EntryDef[] {
+  const stage = operands[0]!.stage;
+  const builtin = stage === "vertex" ? "position" : stage === "fragment" ? "frag_depth" : undefined;
+  if (builtin === undefined) return operands;
+  const canon = stage === "vertex" ? "gl_Position" : "Depth";
+  const reader = stage === "vertex" ? "Positions" : "Depth";
+  const isB = (p: EntryParameter): boolean =>
+    (p.decorations ?? []).some((d) => d.kind === "Builtin" && d.value === builtin);
+  let written = false;
+  return operands.map((op) => {
+    const renames = new Map<string, string>();
+    for (const p of op.outputs) if (isB(p) && p.name !== canon) renames.set(p.name, canon);
+    // reads of the earlier write (not of a builtin input of the same name)
+    const readsWrite = written && op.inputs.some((p) => p.name === reader && !(p.decorations ?? []).some((d) => d.kind === "Builtin"));
+    const inRenames = new Map<string, string>();
+    if (readsWrite && reader !== canon) inRenames.set(reader, canon);
+    if (op.outputs.some(isB)) written = true;
+    if (renames.size === 0 && inRenames.size === 0) return op;
+    const outputs = op.outputs.map((p) => renames.has(p.name) ? { ...p, name: canon } : p);
+    // the renamed input carries the canonical name as its semantic too, so
+    // canonicaliseBySemantic does not fold it back onto the attribute
+    const inputs = op.inputs.map((p) => inRenames.has(p.name) ? { ...p, name: canon, semantic: canon } : p);
+    const rewriteStmt = (st: Stmt): Stmt => {
+      if (st.kind === "WriteOutput") {
+        const r = renames.get(st.name);
+        if (r !== undefined) return { ...st, name: r };
+      }
+      return st;
+    };
+    // mapStmt maps the root's children only: the root (a body that is a
+    // single WriteOutput) goes through rewriteStmt itself
+    const body = rewriteStmt(mapStmt(op.body, {
+      expr: (e: Expr): Expr => {
+        if (e.kind === "ReadInput" && e.scope === "Input") {
+          const r = inRenames.get(e.name);
+          if (r !== undefined) return { ...e, name: r };
+        }
+        return e;
+      },
+      lexpr: (l: LExpr): LExpr => l,
+      stmt: rewriteStmt,
+    }));
+    return { ...op, inputs, outputs, body };
+  });
+}
+
+/**
  * Build a `oldName → canonicalName` rename map keyed on `semantic`.
  * The semantic value itself becomes the canonical name — by
  * definition the semantic IS the canonical name in the wombat /
@@ -556,9 +619,10 @@ function canonicaliseBySemantic(operands: readonly EntryDef[]): readonly EntryDe
       }
       return s;
     };
-    const newBody = mapStmt(op.body, {
+    // the root too: mapStmt maps only its children (a single-WriteOutput body)
+    const newBody = rewriteStmt(mapStmt(op.body, {
       expr: rewriteExpr, lexpr: rewriteLExpr, stmt: rewriteStmt,
-    });
+    }));
     return { ...op, inputs: newInputs, outputs: newOutputs, body: newBody };
   };
   return operands.map(renameOp);
