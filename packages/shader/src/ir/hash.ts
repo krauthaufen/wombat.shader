@@ -60,6 +60,16 @@ export function stableStringify(value: unknown): string {
       if (v === undefined) continue;
       parts.push(JSON.stringify(k) + ":" + stableStringify(v));
     }
+    // The frontend's object-literal carrier (`return { gl_Position: … }`)
+    // keeps its fields on a NON-enumerable `_record` map (so JSON skips
+    // it). Without it two entries differing only inside a returned
+    // record hashed equal, and every id-keyed shader cache (the heap's
+    // persisted WGSL among them) served the other one's code.
+    const record = (value as { _record?: unknown })._record;
+    if (record instanceof Map) {
+      const fields = [...record.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      parts.push('"_record":{' + fields.map(([k, v]) => JSON.stringify(k) + ":" + stableStringify(v)).join(",") + "}");
+    }
     return "{" + parts.join(",") + "}";
   }
   return "null";

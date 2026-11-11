@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { transformInlineShaders } from "@aardworx/wombat.shader-vite";
 import { effect, stage } from "@aardworx/wombat.shader";
+import { parseShader, type EntryRequest } from "@aardworx/wombat.shader/frontend";
 import {
   combineHashes, hashModule,
   type EntryDef, type Module, type Stmt, type Type,
@@ -57,6 +58,25 @@ describe("Effect id (build-time stable hashes)", () => {
     const a = stage(trivialFragment(0.1));
     const b = stage(trivialFragment(0.9));
     expect(a.id).not.toBe(b.id);
+  });
+
+  it("entries differing only inside a returned record have different ids", () => {
+    // `return { … }` keeps its fields on a non-enumerable carrier; the
+    // hash once skipped them, so a changed body kept its id and the
+    // heap's persisted WGSL served the old one.
+    const entries: EntryRequest[] = [{
+      name: "vs", stage: "vertex",
+      inputs: [{ name: "Positions", type: Tvec4f, semantic: "Positions", decorations: [{ kind: "Location", value: 0 }] }],
+      outputs: [{ name: "gl_Position", type: Tvec4f, semantic: "Position", decorations: [{ kind: "Builtin", value: "position" }] }],
+    }];
+    const mk = (body: string) => stage(parseShader({
+      source: `function vs(input: { Positions: V4f }): { gl_Position: V4f } { return { gl_Position: ${body} }; }`,
+      entries,
+    }));
+    const a = mk("input.Positions");
+    const b = mk("input.Positions.mul(2.0)");
+    expect(a.id).not.toBe(b.id);
+    expect(mk("input.Positions").id).toBe(a.id);
   });
 
   it("effect(v, f).id is deterministic on input ids and order", () => {
