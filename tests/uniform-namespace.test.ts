@@ -42,7 +42,7 @@ beforeAll(() => {
       readonly NormalMatrix: M44f;
       readonly CameraLocation: V3f;
       readonly LightLocation: V3f;
-      readonly ViewportSize: V4f;
+      readonly ViewportSize: V2f;
     }
     declare const uniform: UniformScope;
   `);

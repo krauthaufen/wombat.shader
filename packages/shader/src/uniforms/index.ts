@@ -35,7 +35,7 @@
 //     }
 //   }
 
-import type { V3f, V4f, M44f } from "@aardworx/wombat.base";
+import type { V2f, V3f, M44f } from "@aardworx/wombat.base";
 
 /**
  * The standard uniform namespace. Properties match the names the
@@ -77,8 +77,10 @@ export interface UniformScope {
   readonly LightLocation: V3f;
 
   // ─── pipeline state ─────────────────────────────────────────────
-  /** `(width, height)` of the current viewport in pixels. */
-  readonly ViewportSize: V4f;
+  /** `(width, height)` of the current viewport in pixels, as floats (the
+   *  rendering layer supplies whole numbers, a `V2i` as in Aardvark, and
+   *  packs them by the type declared here). */
+  readonly ViewportSize: V2f;
 }
 
 /**
