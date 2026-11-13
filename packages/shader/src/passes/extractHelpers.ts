@@ -190,16 +190,21 @@ export function extractFusedEntry(
   // emit lowers to `out.<field>` per the `merged_state_helper`
   // convention).
   const builtinSemanticToField = new Map<string, string>();
+  const builtinOf = (p: EntryParameter): string | undefined => {
+    const d = (p.decorations ?? []).find((d) => d.kind === "Builtin");
+    return d !== undefined && d.kind === "Builtin" ? d.value : undefined;
+  };
   for (const op of operands) {
     for (const p of op.inputs) {
-      const builtinDec = (p.decorations ?? []).find((d) => d.kind === "Builtin");
-      if (builtinDec && builtinDec.kind === "Builtin") {
-        if (!builtinSemanticToField.has(builtinDec.value)) {
-          builtinSemanticToField.set(builtinDec.value, p.name);
-        }
+      const builtin = builtinOf(p);
+      if (builtin !== undefined && !builtinSemanticToField.has(builtin)) {
+        builtinSemanticToField.set(builtin, p.name);
       }
     }
   }
+  /** The State field of a builtin input (the first declarer's name). */
+  const builtinField = (p: EntryParameter): string =>
+    builtinSemanticToField.get(builtinOf(p)!) ?? p.name;
 
   // Build a helper Function per operand. The helper takes the merged
   // State as its only parameter and returns the (mutated) State.
@@ -270,14 +275,13 @@ export function extractFusedEntry(
       if (sn.scope === "Input") r.add(sn.name);
       else if (sn.scope === "Builtin") builtinSemReads.add(sn.name);
     }
-    // Map declared builtin inputs back to their field-name if the
-    // body reads them.
+    // A builtin the body reads counts under its State field: the ONE
+    // field of that builtin (`builtinSemanticToField`), which is what
+    // the rewired helper bodies read, whatever name this operand
+    // declares it under.
     for (const p of o.inputs) {
-      const builtinDec = (p.decorations ?? []).find((d) => d.kind === "Builtin");
-      if (builtinDec && builtinDec.kind === "Builtin"
-          && builtinSemReads.has(builtinDec.value)) {
-        r.add(p.name);
-      }
+      const builtin = builtinOf(p);
+      if (builtin !== undefined && builtinSemReads.has(builtin)) r.add(builtinField(p));
     }
     return r;
   });
@@ -321,7 +325,15 @@ export function extractFusedEntry(
   const wrapperInputs: EntryParameter[] = [];
   const seenIn = new Set<string>();
   operands.forEach((o, i) => {
-    for (const inp of o.inputs) {
+    for (const inp0 of o.inputs) {
+      // A builtin input goes by its State field: an operand that only
+      // DECLARES the builtin (an F# fragment taking the vertex record:
+      // `position`) names the field, a later one reads it under its own
+      // name (the pick chain's `fragCoord`). Keyed by the declared name,
+      // the wrapper filled a field no helper reads and the read one
+      // stayed zero (every fragment at depth 0).
+      const field = builtinOf(inp0) !== undefined ? builtinField(inp0) : inp0.name;
+      const inp = field === inp0.name ? inp0 : { ...inp0, name: field };
       if (writtenSoFar.has(inp.name)) continue;
       if (!bodyReads[i]!.has(inp.name)) continue;
       if (seenIn.has(inp.name)) continue;
