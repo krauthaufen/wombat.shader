@@ -31,3 +31,11 @@ Reference docs kept: `docs/INTRINSICS.md`, `docs/IR.md`.
 - Surface composition (belongs to the rendering framework).
 - Bindless / texture arrays (deferred until a concrete need).
 - aval-driven adaptive uniforms (deliberately out of scope).
+
+## Test run aborts at exit (found 2026-11-13)
+
+`npx vitest run` ends about every second time with `FATAL ERROR:
+Error::ThrowAsJavaScriptException napi_throw` from `webgpu/dist/linux-x64.dawn.node`
+(inside `processImmediate`), after or instead of the summary; no test fails. A
+throw from the native WebGPU module during teardown, probably a device or
+adapter released while a callback is pending. Rerun until the summary prints.
