@@ -4,8 +4,8 @@ TypeScript port of FShade. Write shaders as TS arrow functions, get
 WGSL/GLSL out via the same IR-level optimiser passes as the F#
 original. Two published packages: `@aardworx/wombat.shader` (the
 runtime + IR + frontend + emitters + types, all in one tree, currently
-`0.5.9`) and `@aardworx/wombat.shader-vite` (the build-time
-inline-marker plugin, currently `0.3.4`).
+`0.6.13`) and `@aardworx/wombat.shader-vite` (the build-time
+inline-marker plugin, currently `0.3.8`).
 
 Status: stable — TS → WGSL/GLSL compiler with full IR optimisation
 (inlining, cross-stage I/O elimination, const-fold, CSE, DCE,
