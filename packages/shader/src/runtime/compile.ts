@@ -25,6 +25,7 @@ import {
   foldConstants,
   inferStorageAccess,
   inlinePass,
+  legaliseBuiltinInputs,
   legaliseTypes,
   instanceUniforms,
   liftReturns,
@@ -208,6 +209,12 @@ export function compileModule(module: Module, options: CompileOptions): Compiled
   // extractHelpers.renumberLocations, the WGSL/GLSL emitters) sees a
   // fully-located IR. Idempotent: parameters that already carry a
   // Location are left alone.
+  // A vertex input is never `@builtin(position)` — that slot is a
+  // fragment-side gl_FragCoord. Hand-built IR (the F# plugin maps
+  // `[<Position>]` to the builtin on both sides) can say otherwise;
+  // demote it to the attribute it really is BEFORE locations are
+  // handed out, so it gets one.
+  m = legaliseBuiltinInputs(m);
   m = assignLocations(m);
   // Auto-instancing rewrite — runs ON the merged module so
   // FS-reads-detection sees the FS entries the VS rewrite needs to

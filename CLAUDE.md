@@ -69,7 +69,8 @@ TS source ──► parseShader ──► IR Module ──► passes ──► e
 - **passes**: `liftReturns` (bare-value → WriteOutput), `inline`,
   `reduceUniforms`, `cse`, `foldConstants`, `dce`, `composeStages`
   (v+v / f+f fuse), `pruneCrossStage`, `inferStorageAccess`,
-  `legaliseTypes`, `reverseMatrixOps`, `linkHelpers` (helper-fusion),
+  `legaliseTypes`, `legaliseBuiltinInputs` (a vertex input is never
+  `@builtin(position)`), `reverseMatrixOps`, `linkHelpers` (helper-fusion),
   `resolveHoles` (closure-hole specialisation). IR substitution passes
   (`substituteUniforms` / `substituteAttributes` / `substituteInputs`)
   also live here and ship via the `./passes` subpath.
