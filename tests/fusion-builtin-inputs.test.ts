@@ -43,7 +43,7 @@ const fragment = (aReads: boolean): string => {
 /** The state field the depth is read from, and whether the wrapper fills it. */
 const check = (fs: string): void => {
   expect(fs.match(/@builtin\(position\)/g)?.length).toBe(1);
-  const field = /out\.Depth = out\.(\w+)\.z/.exec(fs)?.[1];
+  const field = /out\.Depth = s_in\.(\w+)\.z/.exec(fs)?.[1];
   expect(field).toBeDefined();
   expect(fs).toMatch(new RegExp(`s\\.${field} = position;`));
 };

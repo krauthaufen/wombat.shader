@@ -637,8 +637,12 @@ function emitFunction(
   if (isMergedHelper) {
     // Merged-state helper: single in-parameter carries both
     // upstream-helper writes and the wrapper's inputs; the body
-    // mutates a copy and returns it. ReadInput("Input", X) and
-    // WriteOutput(X) both resolve against `out.X`.
+    // mutates a copy and returns it. WriteOutput(X) resolves against
+    // `out.X`; ReadInput("Input", X) against the PARAMETER (`s_in.X`):
+    // a stage reads what came IN, also after it wrote an output of the
+    // same name. Reading `out.X` gave a stage that writes the position
+    // and then reads its input position the position it had just
+    // written (a clip position where the vertex's own was meant).
     const stateParam = sig.parameters[0];
     if (!stateParam) {
       throw new Error(`emitWgsl: merged_state_helper "${sig.name}" needs at least one parameter`);
@@ -647,7 +651,7 @@ function emitFunction(
     const prevOutLocal = ctx.outLocal;
     const prevInputVar = ctx.inputVarName;
     ctx.outLocal = "out";
-    ctx.inputVarName = "out";
+    ctx.inputVarName = safeName(stateParam.name);
     emitStmt(ctx, body);
     ctx.outLocal = prevOutLocal;
     ctx.inputVarName = prevInputVar;

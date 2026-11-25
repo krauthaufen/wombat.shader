@@ -23,6 +23,8 @@ import {
   reduceUniforms,
 } from "@aardworx/wombat.shader/passes";
 import { compileShaderSource } from "@aardworx/wombat.shader";
+import { emitWgsl } from "@aardworx/wombat.shader/wgsl";
+import { emitGlsl } from "@aardworx/wombat.shader/glsl";
 import {
   Tf32, Tvoid, Vec, Mat,
   type EntryDef, type Expr, type Module, type Stmt, type Type, type ValueDef,
@@ -744,5 +746,50 @@ describe("per-stage emit: tree-shake helpers by entry-reachability", () => {
     expect(fs).not.toMatch(/fn _.*vsClip/);
     // FS module also does not contain the VS Entry.
     expect(fs).not.toMatch(/@vertex/);
+  });
+});
+
+
+// A stage reads what came IN, also after it wrote an output of the same name: here a vertex stage writes the
+// position and, after that, reads its input position for another output.
+describe("merged-state helpers read their inputs from the incoming state", () => {
+  const pos = { name: "Positions", type: Tvec4f, semantic: "Positions", decorations: [{ kind: "Location" as const, value: 0 }] };
+  const first: EntryDef = {
+    name: "first", stage: "vertex",
+    inputs: [pos], outputs: [pos],
+    arguments: [], returnType: Tvoid,
+    body: writeOut("Positions", readI("Positions", Tvec4f)),
+    decorations: [],
+  };
+  const second: EntryDef = {
+    name: "second", stage: "vertex",
+    inputs: [pos],
+    outputs: [pos, { name: "Model", type: Tvec3f, semantic: "Model", decorations: [{ kind: "Location" as const, value: 1 }] }],
+    arguments: [], returnType: Tvoid,
+    body: seq(
+      writeOut("Positions", { kind: "MulMatVec", lhs: readU("Mvp", TM44f), rhs: readI("Positions", Tvec4f), type: Tvec4f } as Expr),
+      writeOut("Model", newV3(
+        { kind: "Field", target: readI("Positions", Tvec4f), name: "x", type: Tf32 },
+        { kind: "Field", target: readI("Positions", Tvec4f), name: "y", type: Tf32 },
+        { kind: "Field", target: readI("Positions", Tvec4f), name: "z", type: Tf32 })),
+    ),
+    decorations: [],
+  };
+  const composed = composeStages({ types: [], values: [
+    { kind: "Uniform", uniforms: [{ name: "Mvp", type: TM44f }] } as ValueDef,
+    { kind: "Entry", entry: first }, { kind: "Entry", entry: second } ] });
+
+  it("in WGSL", () => {
+    const source = emitWgsl(composed).source;
+    const line = source.split("\n").find((l) => l.includes(".Model ="))!;
+    expect(line).toContain("s_in.Positions.x");
+    expect(line).not.toContain("out.Positions");
+  });
+
+  it("in GLSL", () => {
+    const source = emitGlsl(composed).source;
+    const line = source.split("\n").find((l) => l.includes(".Model ="))!;
+    expect(line).toContain("s_in.Positions.x");
+    expect(line).not.toContain("_out_.Positions");
   });
 });

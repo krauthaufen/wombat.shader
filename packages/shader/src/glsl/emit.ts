@@ -328,7 +328,9 @@ function emitFunction(
     const prevOutLocal = ctx.outLocal;
     const prevInputVar = ctx.inputVarName;
     (ctx as { outLocal: string | undefined }).outLocal = HELPER_LOCAL;
-    (ctx as { inputVarName: string | undefined }).inputVarName = HELPER_LOCAL;
+    // Inputs are read from the parameter, outputs written to the local: a stage reads what came in, also after it
+    // wrote an output of the same name.
+    (ctx as { inputVarName: string | undefined }).inputVarName = stateParam.name;
     emitStmt(ctx, body);
     (ctx as { outLocal: string | undefined }).outLocal = prevOutLocal;
     (ctx as { inputVarName: string | undefined }).inputVarName = prevInputVar;
